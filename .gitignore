@@ -1,0 +1,17 @@
+config.js
+.env
+.env.local
+.DS_Store
+Thumbs.db
+node_modules/
+.vscode/
+.idea/
+*.log
+
+# Admin app (Vite + React)
+admin-src/node_modules/
+admin-src/dist/
+admin-src/public/config.js
+admin/
+
+# Plan-mode artifacts (none currently committed)

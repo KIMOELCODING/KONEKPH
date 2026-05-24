@@ -8,7 +8,8 @@
 insert into storage.buckets (id, name, public) values
   ('id-documents',  'id-documents',  false),
   ('avatars',       'avatars',       true),
-  ('listing-images','listing-images',true)
+  ('listing-images','listing-images',true),
+  ('article-images','article-images',true)
 on conflict (id) do nothing;
 
 -- ============================================================
@@ -85,3 +86,23 @@ create policy "listing_images owner update" on storage.objects
     bucket_id = 'listing-images'
     and (storage.foldername(name))[1] = auth.uid()::text
   );
+
+-- article-images (public read, admin-only write — backs Home carousel + articles)
+drop policy if exists "article_images public read" on storage.objects;
+create policy "article_images public read" on storage.objects
+  for select using (bucket_id = 'article-images');
+
+drop policy if exists "article_images admin write" on storage.objects;
+create policy "article_images admin write" on storage.objects
+  for insert to authenticated
+  with check (bucket_id = 'article-images' and public.is_admin());
+
+drop policy if exists "article_images admin update" on storage.objects;
+create policy "article_images admin update" on storage.objects
+  for update to authenticated
+  using (bucket_id = 'article-images' and public.is_admin());
+
+drop policy if exists "article_images admin delete" on storage.objects;
+create policy "article_images admin delete" on storage.objects
+  for delete to authenticated
+  using (bucket_id = 'article-images' and public.is_admin());

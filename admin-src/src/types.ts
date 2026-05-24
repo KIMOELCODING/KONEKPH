@@ -33,3 +33,29 @@ export interface Listing {
   created_at: string;
   profiles?: { first_name: string; last_name: string; phone: string | null } | null;
 }
+
+export type ArticleType = 'news' | 'announcement' | 'memorandum';
+
+export interface Article {
+  id: string;
+  type: ArticleType;
+  title: string;
+  body: string | null;
+  image_url: string | null;
+  is_trending: boolean;
+  published_at: string | null;
+  created_at: string;
+}
+
+export interface PromotedSlide {
+  id: string;
+  title: string;
+  company_name: string | null;
+  image_url: string;
+  body: string | null;
+  sort_order: number;
+  is_active: boolean;
+  starts_at: string | null;
+  ends_at: string | null;
+  created_at: string;
+}

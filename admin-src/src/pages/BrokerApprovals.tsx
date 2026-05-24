@@ -24,6 +24,7 @@ export default function BrokerApprovals() {
       .select('*')
       .eq('is_approved', false)
       .eq('role', 'broker')
+      .is('rejected_at', null)
       .order('created_at', { ascending: false });
     if (error) { setToast({ msg: error.message, err: true }); return; }
     setRows((data ?? []) as Profile[]);
@@ -36,15 +37,30 @@ export default function BrokerApprovals() {
     setTimeout(() => setToast(null), 2800);
   }
 
+  async function notify(brokerId: string, action: 'approved' | 'rejected', reason?: string) {
+    const { error } = await sb.functions.invoke('notify-broker', {
+      body: { broker_id: brokerId, action, reason },
+    });
+    return error;
+  }
+
   async function approve(p: Profile) {
     setBusy(p.id);
-    const { error } = await sb
+    const { data, error } = await sb
       .from('profiles')
       .update({ is_approved: true, approved_at: new Date().toISOString(), subscription_status: 'pending_approval' })
-      .eq('id', p.id);
+      .eq('id', p.id)
+      .select();
+    if (error) { setBusy(null); showToast(error.message, true); return; }
+    if (!data || data.length === 0) {
+      setBusy(null);
+      showToast('Update blocked by RLS — confirm your account has role=admin in profiles.', true);
+      return;
+    }
+    const mailErr = await notify(p.id, 'approved');
     setBusy(null);
-    if (error) { showToast(error.message, true); return; }
-    showToast('Broker approved.');
+    if (mailErr) showToast('Approved, but email failed: ' + mailErr.message, true);
+    else showToast('Broker approved and notified.');
     setRows(rs => rs?.filter(r => r.id !== p.id) ?? rs);
   }
 
@@ -52,15 +68,28 @@ export default function BrokerApprovals() {
     const reason = prompt('Rejection reason (will be sent to the broker):');
     if (!reason) return;
     setBusy(p.id);
-    const { error } = await sb.from('notifications').insert({
+    const { data, error } = await sb
+      .from('profiles')
+      .update({ rejected_at: new Date().toISOString(), rejected_reason: reason })
+      .eq('id', p.id)
+      .select();
+    if (error) { setBusy(null); showToast(error.message, true); return; }
+    if (!data || data.length === 0) {
+      setBusy(null);
+      showToast('Update blocked by RLS — confirm your account has role=admin in profiles.', true);
+      return;
+    }
+    const notif = await sb.from('notifications').insert({
       user_id: p.id,
       type: 'broker_rejected',
       title: 'Application rejected',
       body: reason,
     });
+    const mailErr = await notify(p.id, 'rejected', reason);
     setBusy(null);
-    if (error) { showToast(error.message, true); return; }
-    showToast('Rejection sent.');
+    if (notif.error) showToast('Rejected, but in-app notification failed: ' + notif.error.message, true);
+    else if (mailErr) showToast('Rejected, but email failed: ' + mailErr.message, true);
+    else showToast('Broker rejected and notified.');
     setRows(rs => rs?.filter(r => r.id !== p.id) ?? rs);
   }
 

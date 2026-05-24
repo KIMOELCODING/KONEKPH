@@ -5,6 +5,8 @@ import type { Profile } from './types';
 import Login from './pages/Login';
 import BrokerApprovals from './pages/BrokerApprovals';
 import ListingApprovals from './pages/ListingApprovals';
+import AdminArticles from './pages/AdminArticles';
+import AdminPromotions from './pages/AdminPromotions';
 import Shell from './components/Shell';
 
 type AuthState =
@@ -140,6 +142,8 @@ export default function App() {
         <Route path="/" element={<Navigate to="/brokers" replace />} />
         <Route path="/brokers" element={<BrokerApprovals />} />
         <Route path="/listings" element={<ListingApprovals />} />
+        <Route path="/articles" element={<AdminArticles />} />
+        <Route path="/promotions" element={<AdminPromotions />} />
         <Route path="*" element={<Navigate to="/brokers" replace />} />
       </Routes>
     </Shell>

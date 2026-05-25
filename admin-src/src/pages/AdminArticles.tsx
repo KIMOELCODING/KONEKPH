@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { sb } from '../lib/supabase';
 import type { Article, ArticleType } from '../types';
 
@@ -181,77 +181,14 @@ export default function AdminArticles() {
       </div>
 
       {form && (
-        <div className="card" style={{ marginBottom: 16, background: 'rgba(255,255,255,.65)' }}>
-          <div className="card-header">
-            <div className="card-title">{form.id ? 'Edit article' : 'New article'}</div>
-            <button className="btn btn-ghost" onClick={() => setForm(null)}>Cancel</button>
-          </div>
-          <div style={{ display: 'grid', gap: 12, padding: 4 }}>
-            <label>
-              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Type</div>
-              <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value as ArticleType })} className="input">
-                {TYPES.map(t => <option key={t} value={t} style={{ textTransform: 'capitalize' }}>{t}</option>)}
-              </select>
-            </label>
-            <label>
-              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Title *</div>
-              <input className="input" value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} />
-            </label>
-            <label>
-              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Image</div>
-              {form.image_url && (
-                <div style={{ marginBottom: 8 }}>
-                  <img src={form.image_url} alt="" style={{ maxWidth: 260, maxHeight: 160, borderRadius: 8, objectFit: 'cover' }} />
-                </div>
-              )}
-              <input
-                type="file"
-                accept="image/*"
-                disabled={uploading}
-                onChange={async e => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  const url = await uploadImage(file);
-                  if (url) setForm(f => f ? { ...f, image_url: url } : f);
-                }}
-              />
-              {uploading && <span style={{ marginLeft: 10, fontSize: 12 }}>Uploading…</span>}
-              <input
-                className="input"
-                placeholder="…or paste an image URL"
-                value={form.image_url}
-                onChange={e => setForm({ ...form, image_url: e.target.value })}
-                style={{ marginTop: 6 }}
-              />
-            </label>
-            <label>
-              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Body</div>
-              <textarea
-                className="input"
-                rows={6}
-                value={form.body}
-                onChange={e => setForm({ ...form, body: e.target.value })}
-                placeholder="Write the full article body. Plain text or simple HTML."
-              />
-            </label>
-            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <input type="checkbox" checked={form.is_trending} onChange={e => setForm({ ...form, is_trending: e.target.checked })} />
-                Trending
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <input type="checkbox" checked={form.publish} onChange={e => setForm({ ...form, publish: e.target.checked })} />
-                Publish (visible to brokers)
-              </label>
-            </div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button className="btn btn-ghost" onClick={() => setForm(null)}>Cancel</button>
-              <button className="btn btn-primary" disabled={busy !== null} onClick={save}>
-                {form.id ? 'Save changes' : 'Create article'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <ArticleForm
+          form={form}
+          setForm={setForm}
+          busy={busy}
+          uploading={uploading}
+          uploadImage={uploadImage}
+          save={save}
+        />
       )}
 
       {filtered && filtered.length === 0 && (
@@ -298,6 +235,169 @@ export default function AdminArticles() {
       )}
 
       {toast && <div className={'toast' + (toast.err ? ' error' : '')}><i className={'fa-solid ' + (toast.err ? 'fa-circle-exclamation' : 'fa-circle-check')}></i> {toast.msg}</div>}
+    </div>
+  );
+}
+
+interface ArticleFormProps {
+  form: FormState;
+  setForm: (f: FormState | null | ((prev: FormState | null) => FormState | null)) => void;
+  busy: string | null;
+  uploading: boolean;
+  uploadImage: (file: File) => Promise<string | null>;
+  save: () => Promise<void>;
+}
+
+function ArticleForm({ form, setForm, busy, uploading, uploadImage, save }: ArticleFormProps) {
+  const [dragOver, setDragOver] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const wordCount = useMemo(
+    () => form.body.trim().split(/\s+/).filter(Boolean).length,
+    [form.body]
+  );
+
+  async function handleFile(file: File | undefined) {
+    if (!file) return;
+    const url = await uploadImage(file);
+    if (url) setForm(f => f ? { ...f, image_url: url } : f);
+  }
+
+  function onDrop(e: DragEvent) {
+    e.preventDefault();
+    setDragOver(false);
+    handleFile(e.dataTransfer.files?.[0]);
+  }
+
+  return (
+    <div className="form-card">
+      <div className="form-header">
+        <div className="form-title">{form.id ? 'Edit article' : 'New article'}</div>
+        <button className="btn btn-ghost" onClick={() => setForm(null)}>
+          <i className="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div className="form-grid">
+        <div className="form-field">
+          <div className="form-label">Type</div>
+          <div className="seg" role="tablist">
+            {TYPES.map(t => (
+              <button
+                key={t}
+                type="button"
+                role="tab"
+                aria-selected={form.type === t}
+                className={'seg-btn' + (form.type === t ? ' active' : '')}
+                onClick={() => setForm({ ...form, type: t })}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="form-field">
+          <div className="form-label">Title <span className="req">*</span></div>
+          <input
+            className="input"
+            value={form.title}
+            onChange={e => setForm({ ...form, title: e.target.value })}
+            placeholder="A short, descriptive headline"
+          />
+        </div>
+
+        <div className="form-field">
+          <div className="form-label">Image</div>
+          <div
+            className={'dropzone' + (dragOver ? ' is-drag' : '') + (uploading ? ' is-busy' : '')}
+            onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={onDrop}
+            onClick={() => fileRef.current?.click()}
+          >
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              disabled={uploading}
+              onChange={e => handleFile(e.target.files?.[0])}
+            />
+            {form.image_url ? (
+              <div className="dz-preview">
+                <img src={form.image_url} alt="" />
+                <div className="dz-pmeta">
+                  <strong>Image attached</strong>
+                  {uploading ? 'Uploading…' : 'Click or drop another file to replace.'}
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="dz-icon"><i className="fa-solid fa-cloud-arrow-up"></i></div>
+                <div className="dz-title">{uploading ? 'Uploading…' : 'Drag & drop or click to upload'}</div>
+                <div className="dz-hint">PNG, JPG, or WebP · up to ~5 MB</div>
+              </>
+            )}
+          </div>
+          <div className="or-divider">or</div>
+          <input
+            className="input"
+            placeholder="Paste an image URL"
+            value={form.image_url}
+            onChange={e => setForm({ ...form, image_url: e.target.value })}
+          />
+        </div>
+
+        <div className="form-field">
+          <div className="form-label">Body</div>
+          <textarea
+            className="input"
+            style={{ minHeight: 160 }}
+            value={form.body}
+            onChange={e => setForm({ ...form, body: e.target.value })}
+            placeholder="Write the full article body. Plain text or simple HTML."
+          />
+          <div className="form-counter">{wordCount} {wordCount === 1 ? 'word' : 'words'}</div>
+        </div>
+
+        <div>
+          <label className="toggle-row">
+            <div className="toggle-text">
+              <div className="toggle-title">Trending</div>
+              <div className="toggle-help">Pin this article to the Trending sidebar on the broker home page.</div>
+            </div>
+            <span className="toggle">
+              <input
+                type="checkbox"
+                checked={form.is_trending}
+                onChange={e => setForm({ ...form, is_trending: e.target.checked })}
+              />
+              <span className="slider"></span>
+            </span>
+          </label>
+          <label className="toggle-row">
+            <div className="toggle-text">
+              <div className="toggle-title">Publish</div>
+              <div className="toggle-help">Make visible to brokers. Leave off to save as a draft.</div>
+            </div>
+            <span className="toggle">
+              <input
+                type="checkbox"
+                checked={form.publish}
+                onChange={e => setForm({ ...form, publish: e.target.checked })}
+              />
+              <span className="slider"></span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div className="form-footer">
+        <button className="btn btn-ghost" onClick={() => setForm(null)}>Cancel</button>
+        <button className="btn btn-primary" disabled={busy !== null} onClick={save}>
+          {form.id ? 'Save changes' : 'Create article'}
+        </button>
+      </div>
     </div>
   );
 }

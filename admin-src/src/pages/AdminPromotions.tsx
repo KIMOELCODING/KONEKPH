@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { sb } from '../lib/supabase';
 import type { PromotedSlide } from '../types';
 
@@ -183,91 +183,14 @@ export default function AdminPromotions() {
       </div>
 
       {form && (
-        <div className="card" style={{ marginBottom: 16, background: 'rgba(255,255,255,.65)' }}>
-          <div className="card-header">
-            <div className="card-title">{form.id ? 'Edit slide' : 'New slide'}</div>
-            <button className="btn btn-ghost" onClick={() => setForm(null)}>Cancel</button>
-          </div>
-          <div style={{ display: 'grid', gap: 12, padding: 4 }}>
-            <label>
-              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Title *</div>
-              <input className="input" value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} />
-            </label>
-            <label>
-              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Company name</div>
-              <input className="input" value={form.company_name} onChange={e => setForm({ ...form, company_name: e.target.value })} placeholder="Shown as the byline" />
-            </label>
-            <label>
-              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Image *</div>
-              {form.image_url && (
-                <div style={{ marginBottom: 8 }}>
-                  <img src={form.image_url} alt="" style={{ maxWidth: 320, maxHeight: 200, borderRadius: 8, objectFit: 'cover' }} />
-                </div>
-              )}
-              <input
-                type="file"
-                accept="image/*"
-                disabled={uploading}
-                onChange={async e => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  const url = await uploadImage(file);
-                  if (url) setForm(f => f ? { ...f, image_url: url } : f);
-                }}
-              />
-              {uploading && <span style={{ marginLeft: 10, fontSize: 12 }}>Uploading…</span>}
-              <input
-                className="input"
-                placeholder="…or paste an image URL"
-                value={form.image_url}
-                onChange={e => setForm({ ...form, image_url: e.target.value })}
-                style={{ marginTop: 6 }}
-              />
-            </label>
-            <label>
-              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Body (shown when the slide is clicked)</div>
-              <textarea
-                className="input"
-                rows={5}
-                value={form.body}
-                onChange={e => setForm({ ...form, body: e.target.value })}
-                placeholder="Describe the promotion in detail."
-              />
-            </label>
-            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr 1fr' }}>
-              <label>
-                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Starts at</div>
-                <input type="datetime-local" className="input" value={form.starts_at} onChange={e => setForm({ ...form, starts_at: e.target.value })} />
-              </label>
-              <label>
-                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Ends at</div>
-                <input type="datetime-local" className="input" value={form.ends_at} onChange={e => setForm({ ...form, ends_at: e.target.value })} />
-              </label>
-            </div>
-            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                Sort order
-                <input
-                  type="number"
-                  className="input"
-                  style={{ width: 80, marginLeft: 6 }}
-                  value={form.sort_order}
-                  onChange={e => setForm({ ...form, sort_order: Number(e.target.value) || 0 })}
-                />
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <input type="checkbox" checked={form.is_active} onChange={e => setForm({ ...form, is_active: e.target.checked })} />
-                Active
-              </label>
-            </div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button className="btn btn-ghost" onClick={() => setForm(null)}>Cancel</button>
-              <button className="btn btn-primary" disabled={busy !== null} onClick={save}>
-                {form.id ? 'Save changes' : 'Create slide'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <SlideForm
+          form={form}
+          setForm={setForm}
+          busy={busy}
+          uploading={uploading}
+          uploadImage={uploadImage}
+          save={save}
+        />
       )}
 
       {rows && rows.length === 0 && (
@@ -313,6 +236,179 @@ export default function AdminPromotions() {
       )}
 
       {toast && <div className={'toast' + (toast.err ? ' error' : '')}><i className={'fa-solid ' + (toast.err ? 'fa-circle-exclamation' : 'fa-circle-check')}></i> {toast.msg}</div>}
+    </div>
+  );
+}
+
+interface SlideFormProps {
+  form: FormState;
+  setForm: (f: FormState | null | ((prev: FormState | null) => FormState | null)) => void;
+  busy: string | null;
+  uploading: boolean;
+  uploadImage: (file: File) => Promise<string | null>;
+  save: () => Promise<void>;
+}
+
+function SlideForm({ form, setForm, busy, uploading, uploadImage, save }: SlideFormProps) {
+  const [dragOver, setDragOver] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const bodyChars = form.body.length;
+  const wordCount = useMemo(
+    () => form.body.trim().split(/\s+/).filter(Boolean).length,
+    [form.body]
+  );
+
+  async function handleFile(file: File | undefined) {
+    if (!file) return;
+    const url = await uploadImage(file);
+    if (url) setForm(f => f ? { ...f, image_url: url } : f);
+  }
+
+  function onDrop(e: DragEvent) {
+    e.preventDefault();
+    setDragOver(false);
+    handleFile(e.dataTransfer.files?.[0]);
+  }
+
+  return (
+    <div className="form-card">
+      <div className="form-header">
+        <div className="form-title">{form.id ? 'Edit slide' : 'New slide'}</div>
+        <button className="btn btn-ghost" onClick={() => setForm(null)}>
+          <i className="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div className="form-grid">
+        <div className="form-field">
+          <div className="form-label">Title <span className="req">*</span></div>
+          <input
+            className="input"
+            value={form.title}
+            onChange={e => setForm({ ...form, title: e.target.value })}
+            placeholder="Headline shown on the carousel slide"
+          />
+        </div>
+
+        <div className="form-field">
+          <div className="form-label">Company name</div>
+          <input
+            className="input"
+            value={form.company_name}
+            onChange={e => setForm({ ...form, company_name: e.target.value })}
+            placeholder="Shown as the byline"
+          />
+        </div>
+
+        <div className="form-field">
+          <div className="form-label">Image <span className="req">*</span></div>
+          <div
+            className={'dropzone' + (dragOver ? ' is-drag' : '') + (uploading ? ' is-busy' : '')}
+            onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={onDrop}
+            onClick={() => fileRef.current?.click()}
+          >
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              disabled={uploading}
+              onChange={e => handleFile(e.target.files?.[0])}
+            />
+            {form.image_url ? (
+              <div className="dz-preview">
+                <img src={form.image_url} alt="" />
+                <div className="dz-pmeta">
+                  <strong>Image attached</strong>
+                  {uploading ? 'Uploading…' : 'Click or drop another file to replace.'}
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="dz-icon"><i className="fa-solid fa-cloud-arrow-up"></i></div>
+                <div className="dz-title">{uploading ? 'Uploading…' : 'Drag & drop or click to upload'}</div>
+                <div className="dz-hint">PNG, JPG, or WebP · up to ~5 MB · required</div>
+              </>
+            )}
+          </div>
+          <div className="or-divider">or</div>
+          <input
+            className="input"
+            placeholder="Paste an image URL"
+            value={form.image_url}
+            onChange={e => setForm({ ...form, image_url: e.target.value })}
+          />
+        </div>
+
+        <div className="form-field">
+          <div className="form-label">Body (shown when slide is clicked)</div>
+          <textarea
+            className="input"
+            style={{ minHeight: 140 }}
+            value={form.body}
+            onChange={e => setForm({ ...form, body: e.target.value })}
+            placeholder="Describe the promotion in detail."
+          />
+          <div className="form-counter">{wordCount} {wordCount === 1 ? 'word' : 'words'} · {bodyChars} chars</div>
+        </div>
+
+        <div className="form-grid-2" style={{ alignItems: 'end' }}>
+          <div className="form-field">
+            <div className="form-label">Starts at</div>
+            <input
+              type="datetime-local"
+              className="input"
+              value={form.starts_at}
+              onChange={e => setForm({ ...form, starts_at: e.target.value })}
+            />
+          </div>
+          <div className="form-field">
+            <div className="form-label">Ends at</div>
+            <input
+              type="datetime-local"
+              className="input"
+              value={form.ends_at}
+              onChange={e => setForm({ ...form, ends_at: e.target.value })}
+            />
+          </div>
+        </div>
+
+        <div className="form-grid-2" style={{ alignItems: 'start' }}>
+          <div className="form-field">
+            <div className="form-label">Sort order</div>
+            <input
+              type="number"
+              className="input"
+              value={form.sort_order}
+              onChange={e => setForm({ ...form, sort_order: Number(e.target.value) || 0 })}
+            />
+            <div className="form-help">Lower numbers appear first in the carousel.</div>
+          </div>
+          <label className="toggle-row" style={{ marginTop: 0 }}>
+            <div className="toggle-text">
+              <div className="toggle-title">Active</div>
+              <div className="toggle-help">Inactive slides are hidden from the broker carousel.</div>
+            </div>
+            <span className="toggle">
+              <input
+                type="checkbox"
+                checked={form.is_active}
+                onChange={e => setForm({ ...form, is_active: e.target.checked })}
+              />
+              <span className="slider"></span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div className="form-footer">
+        <button className="btn btn-ghost" onClick={() => setForm(null)}>Cancel</button>
+        <button className="btn btn-primary" disabled={busy !== null} onClick={save}>
+          {form.id ? 'Save changes' : 'Create slide'}
+        </button>
+      </div>
     </div>
   );
 }

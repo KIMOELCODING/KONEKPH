@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { sb } from '../lib/supabase';
 import type { Listing } from '../types';
+import RejectModal from '../components/RejectModal';
 
 function peso(n: number) {
   return '₱' + n.toLocaleString('en-PH');
@@ -28,6 +29,7 @@ export default function ListingApprovals() {
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; err?: boolean } | null>(null);
   const [viewing, setViewing] = useState<Listing | null>(null);
+  const [rejecting, setRejecting] = useState<Listing | null>(null);
 
   async function load() {
     const { data, error } = await sb
@@ -71,9 +73,7 @@ export default function ListingApprovals() {
     setRows(rs => rs?.filter(r => r.id !== l.id) ?? rs);
   }
 
-  async function reject(l: Listing) {
-    const reason = prompt('Rejection reason:');
-    if (!reason) return;
+  async function confirmReject(l: Listing, reason: string) {
     setBusy(l.id);
     const { error } = await sb
       .from('listings')
@@ -96,6 +96,7 @@ export default function ListingApprovals() {
       }).catch(e => console.warn('notify-broker (listing_rejected) failed:', e));
     }
     setBusy(null);
+    setRejecting(null);
     if (error) { showToast(error.message, true); return; }
     showToast('Listing rejected.');
     setViewing(v => v?.id === l.id ? null : v);
@@ -149,7 +150,7 @@ export default function ListingApprovals() {
                     <button className="btn btn-secondary" disabled={busy === l.id} onClick={() => setViewing(l)}>
                       <i className="fa-regular fa-eye"></i> View
                     </button>
-                    <button className="btn btn-danger" disabled={busy === l.id} onClick={() => reject(l)}>Reject</button>
+                    <button className="btn btn-danger" disabled={busy === l.id} onClick={() => setRejecting(l)}>Reject</button>
                     <button className="btn btn-primary" disabled={busy === l.id} onClick={() => approve(l)} style={{ flex: 1, justifyContent: 'center' }}>Approve</button>
                   </div>
                 </div>
@@ -161,6 +162,16 @@ export default function ListingApprovals() {
 
       {toast && <div className={'toast' + (toast.err ? ' error' : '')}><i className={'fa-solid ' + (toast.err ? 'fa-circle-exclamation' : 'fa-circle-check')}></i> {toast.msg}</div>}
     </div>
+
+    {rejecting && (
+      <RejectModal
+        title="Reject listing"
+        subject={rejecting.title}
+        busy={busy === rejecting.id}
+        onCancel={() => setRejecting(null)}
+        onConfirm={(reason) => confirmReject(rejecting, reason)}
+      />
+    )}
 
     {viewing && (
       <div className="modal-overlay" onClick={() => setViewing(null)}>
@@ -217,7 +228,7 @@ export default function ListingApprovals() {
 
           <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
             <button className="btn btn-secondary" onClick={() => setViewing(null)}>Close</button>
-            <button className="btn btn-danger" disabled={busy === viewing.id} onClick={() => reject(viewing)}>Reject</button>
+            <button className="btn btn-danger" disabled={busy === viewing.id} onClick={() => setRejecting(viewing)}>Reject</button>
             <button className="btn btn-primary" disabled={busy === viewing.id} onClick={() => approve(viewing)}>Approve</button>
           </div>
         </div>

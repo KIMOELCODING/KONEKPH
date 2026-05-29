@@ -1,5 +1,6 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import type { Profile } from '../types';
+import NotifBell from './NotifBell';
 
 interface Props {
   profile: Profile;
@@ -47,6 +48,7 @@ export default function Shell({ profile, onSignOut, children }: Props) {
         <header className="topbar">
           <div className="page-title">{title}</div>
           <div className="topbar-right">
+            <NotifBell userId={profile.id} />
             <div className="user-pill">
               <div className="avatar">{initials}</div>
               <span>{profile.first_name || 'Admin'} {profile.last_name || ''}</span>

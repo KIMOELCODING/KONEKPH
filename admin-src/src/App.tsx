@@ -1,13 +1,20 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { sb } from './lib/supabase';
 import type { Profile } from './types';
 import Login from './pages/Login';
-import BrokerApprovals from './pages/BrokerApprovals';
-import ListingApprovals from './pages/ListingApprovals';
-import AdminArticles from './pages/AdminArticles';
-import AdminPromotions from './pages/AdminPromotions';
 import Shell from './components/Shell';
+
+// Route-level code splitting — login flow doesn't need the admin bundles,
+// and each admin page becomes a separate chunk.
+const BrokerApprovals  = lazy(() => import('./pages/BrokerApprovals'));
+const ListingApprovals = lazy(() => import('./pages/ListingApprovals'));
+const AdminArticles    = lazy(() => import('./pages/AdminArticles'));
+const AdminPromotions  = lazy(() => import('./pages/AdminPromotions'));
+
+function PageFallback() {
+  return <div className="card"><p className="muted">Loading…</p></div>;
+}
 
 type AuthState =
   | { kind: 'loading' }
@@ -138,14 +145,16 @@ export default function App() {
 
   return (
     <Shell profile={auth.profile} onSignOut={async () => { await sb.auth.signOut(); }}>
-      <Routes>
-        <Route path="/" element={<Navigate to="/brokers" replace />} />
-        <Route path="/brokers" element={<BrokerApprovals />} />
-        <Route path="/listings" element={<ListingApprovals />} />
-        <Route path="/articles" element={<AdminArticles />} />
-        <Route path="/promotions" element={<AdminPromotions />} />
-        <Route path="*" element={<Navigate to="/brokers" replace />} />
-      </Routes>
+      <Suspense fallback={<PageFallback />}>
+        <Routes>
+          <Route path="/" element={<Navigate to="/brokers" replace />} />
+          <Route path="/brokers" element={<BrokerApprovals />} />
+          <Route path="/listings" element={<ListingApprovals />} />
+          <Route path="/articles" element={<AdminArticles />} />
+          <Route path="/promotions" element={<AdminPromotions />} />
+          <Route path="*" element={<Navigate to="/brokers" replace />} />
+        </Routes>
+      </Suspense>
     </Shell>
   );
 }

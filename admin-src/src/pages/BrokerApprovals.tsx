@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { sb } from '../lib/supabase';
 import type { Profile } from '../types';
+import RejectModal from '../components/RejectModal';
 
 interface DocState { url: string | null; error: string | null }
 interface DocUrls { id_photo: DocState; prc_id: DocState }
@@ -17,6 +18,7 @@ export default function BrokerApprovals() {
   const [toast, setToast] = useState<{ msg: string; err?: boolean } | null>(null);
   const [viewing, setViewing] = useState<Profile | null>(null);
   const [docs, setDocs] = useState<DocUrls>(emptyDocs);
+  const [rejecting, setRejecting] = useState<Profile | null>(null);
 
   async function load() {
     const { data, error } = await sb
@@ -57,25 +59,31 @@ export default function BrokerApprovals() {
       showToast('Update blocked by RLS — confirm your account has role=admin in profiles.', true);
       return;
     }
+    const notif = await sb.from('notifications').insert({
+      user_id: p.id,
+      type: 'broker_approved',
+      title: 'Account approved',
+      body: 'Your Konek.PH broker account has been approved.',
+    });
     const mailErr = await notify(p.id, 'approved');
     setBusy(null);
-    if (mailErr) showToast('Approved, but email failed: ' + mailErr.message, true);
+    if (notif.error) showToast('Approved, but in-app notification failed: ' + notif.error.message, true);
+    else if (mailErr) showToast('Approved, but email failed: ' + mailErr.message, true);
     else showToast('Broker approved and notified.');
     setRows(rs => rs?.filter(r => r.id !== p.id) ?? rs);
   }
 
-  async function reject(p: Profile) {
-    const reason = prompt('Rejection reason (will be sent to the broker):');
-    if (!reason) return;
+  async function confirmReject(p: Profile, reason: string) {
     setBusy(p.id);
     const { data, error } = await sb
       .from('profiles')
       .update({ rejected_at: new Date().toISOString(), rejected_reason: reason })
       .eq('id', p.id)
       .select();
-    if (error) { setBusy(null); showToast(error.message, true); return; }
+    if (error) { setBusy(null); setRejecting(null); showToast(error.message, true); return; }
     if (!data || data.length === 0) {
       setBusy(null);
+      setRejecting(null);
       showToast('Update blocked by RLS — confirm your account has role=admin in profiles.', true);
       return;
     }
@@ -87,6 +95,7 @@ export default function BrokerApprovals() {
     });
     const mailErr = await notify(p.id, 'rejected', reason);
     setBusy(null);
+    setRejecting(null);
     if (notif.error) showToast('Rejected, but in-app notification failed: ' + notif.error.message, true);
     else if (mailErr) showToast('Rejected, but email failed: ' + mailErr.message, true);
     else showToast('Broker rejected and notified.');
@@ -154,7 +163,7 @@ export default function BrokerApprovals() {
                     <button className="btn btn-secondary" disabled={busy === p.id} onClick={() => openDocs(p)}>
                       <i className="fa-regular fa-eye"></i> Docs
                     </button>
-                    <button className="btn btn-danger" disabled={busy === p.id} onClick={() => reject(p)}>
+                    <button className="btn btn-danger" disabled={busy === p.id} onClick={() => setRejecting(p)}>
                       Reject
                     </button>
                     <button className="btn btn-primary" disabled={busy === p.id} onClick={() => approve(p)}>
@@ -203,6 +212,16 @@ export default function BrokerApprovals() {
             </div>
           </div>
         </div>
+      )}
+
+      {rejecting && (
+        <RejectModal
+          title="Reject broker application"
+          subject={`${rejecting.first_name} ${rejecting.last_name} · ${rejecting.email ?? ''}`}
+          busy={busy === rejecting.id}
+          onCancel={() => setRejecting(null)}
+          onConfirm={(reason) => confirmReject(rejecting, reason)}
+        />
       )}
 
       {toast && <div className={'toast' + (toast.err ? ' error' : '')}><i className={'fa-solid ' + (toast.err ? 'fa-circle-exclamation' : 'fa-circle-check')}></i> {toast.msg}</div>}

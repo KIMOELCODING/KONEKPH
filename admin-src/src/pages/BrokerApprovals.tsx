@@ -21,7 +21,7 @@ export default function BrokerApprovals() {
   async function load() {
     const { data, error } = await sb
       .from('profiles')
-      .select('*')
+      .select('id, first_name, last_name, email, phone, license_number, id_photo_url, prc_id_url, is_approved, approved_at, role, subscription_status, created_at')
       .eq('is_approved', false)
       .eq('role', 'broker')
       .is('rejected_at', null)

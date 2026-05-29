@@ -9,12 +9,20 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-type Action = "approved" | "rejected" | "new_signup" | "reapply";
+type Action =
+  | "approved"
+  | "rejected"
+  | "new_signup"
+  | "reapply"
+  | "new_listing"
+  | "listing_approved"
+  | "listing_rejected";
 
 interface Payload {
   broker_id: string;
   action: Action;
   reason?: string;
+  listing_id?: string;
 }
 
 const SMTP_USER = Deno.env.get("SMTP_USER")!;
@@ -72,6 +80,51 @@ function renderAdminEmail(b: Broker) {
   };
 }
 
+function renderListingEmail(
+  action: "listing_approved" | "listing_rejected",
+  name: string,
+  listingTitle: string,
+  reason?: string,
+) {
+  if (action === "listing_approved") {
+    return {
+      subject: `Your listing "${listingTitle}" has been approved`,
+      text:
+        `Hi ${name},\n\n` +
+        `Good news — your listing "${listingTitle}" has been approved and is ` +
+        `now live on Konek.PH.\n\n` +
+        `View your listings: ${APP_URL}\n\n` +
+        `— The Konek.PH Team`,
+    };
+  }
+  return {
+    subject: `Update on your listing "${listingTitle}"`,
+    text:
+      `Hi ${name},\n\n` +
+      `Thank you for posting on Konek.PH. After review, your listing ` +
+      `"${listingTitle}" was not approved at this time.\n\n` +
+      (reason ? `Reason from our team:\n${reason}\n\n` : "") +
+      `You may edit the listing and resubmit it for review: ${APP_URL}\n\n` +
+      `— The Konek.PH Team`,
+  };
+}
+
+function renderAdminNewListingEmail(b: Broker, listingTitle: string) {
+  const name = `${b.first_name ?? ""} ${b.last_name ?? ""}`.trim() || "(no name)";
+  return {
+    subject: `New listing pending review: ${listingTitle}`,
+    text:
+      `A broker has posted a new listing awaiting your approval.\n\n` +
+      `Broker:  ${name}\n` +
+      `Email:   ${b.email ?? "—"}\n` +
+      `Phone:   ${b.phone ?? "—"}\n` +
+      `License: ${b.license_number ?? "—"}\n` +
+      `Listing: ${listingTitle}\n\n` +
+      `Review pending listings: ${ADMIN_URL}\n\n` +
+      `— Konek.PH`,
+  };
+}
+
 function renderAdminReapplyEmail(b: Broker) {
   const name = `${b.first_name ?? ""} ${b.last_name ?? ""}`.trim() || "(no name)";
   return {
@@ -114,21 +167,28 @@ serve(async (req) => {
     const body = (await req.json()) as Payload;
     if (
       !body.broker_id ||
-      !["approved", "rejected", "new_signup", "reapply"].includes(body.action)
+      !["approved", "rejected", "new_signup", "reapply", "new_listing", "listing_approved", "listing_rejected"]
+        .includes(body.action)
     ) {
       return json({ error: "Invalid payload" }, 400);
     }
+    if (
+      (body.action === "new_listing" || body.action === "listing_approved" || body.action === "listing_rejected") &&
+      !body.listing_id
+    ) {
+      return json({ error: "listing_id required for listing actions" }, 400);
+    }
 
     // Authorization:
-    //  - approved / rejected → admin only
-    //  - new_signup / reapply → caller must be the broker themselves
+    //  - approved / rejected / listing_approved / listing_rejected → admin only
+    //  - new_signup / reapply / new_listing → caller must be the broker themselves
     const { data: callerProfile } = await userClient
       .from("profiles")
       .select("role")
       .eq("id", userData.user.id)
       .single();
 
-    if (body.action === "new_signup" || body.action === "reapply") {
+    if (body.action === "new_signup" || body.action === "reapply" || body.action === "new_listing") {
       if (userData.user.id !== body.broker_id) {
         return json({ error: "Forbidden — broker_id must match caller" }, 403);
       }
@@ -158,11 +218,35 @@ serve(async (req) => {
     } else if (body.action === "reapply") {
       to = ADMIN_EMAIL;
       ({ subject, text } = renderAdminReapplyEmail(broker as Broker));
+    } else if (body.action === "new_listing") {
+      const { data: listing } = await admin
+        .from("listings")
+        .select("title")
+        .eq("id", body.listing_id!)
+        .single();
+      const listingTitle = listing?.title || "(untitled listing)";
+      to = ADMIN_EMAIL;
+      ({ subject, text } = renderAdminNewListingEmail(broker as Broker, listingTitle));
+    } else if (body.action === "listing_approved" || body.action === "listing_rejected") {
+      const { data: listing } = await admin
+        .from("listings")
+        .select("title")
+        .eq("id", body.listing_id!)
+        .single();
+      const listingTitle = listing?.title || "your listing";
+      to = broker.email;
+      const fullName =
+        `${broker.first_name ?? ""} ${broker.last_name ?? ""}`.trim() || "there";
+      ({ subject, text } = renderListingEmail(body.action, fullName, listingTitle, body.reason));
     } else {
       to = broker.email;
       const fullName =
         `${broker.first_name ?? ""} ${broker.last_name ?? ""}`.trim() || "there";
-      ({ subject, text } = renderBrokerEmail(body.action, fullName, body.reason));
+      ({ subject, text } = renderBrokerEmail(
+        body.action as "approved" | "rejected",
+        fullName,
+        body.reason,
+      ));
     }
 
     const client = new SMTPClient({

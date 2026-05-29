@@ -15,3 +15,6 @@ admin-src/public/config.js
 admin/
 
 # Plan-mode artifacts (none currently committed)
+
+# Supabase CLI local state
+supabase/.temp/

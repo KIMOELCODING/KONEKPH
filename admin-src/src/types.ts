@@ -26,12 +26,17 @@ export interface Listing {
   city: string;
   barangay: string | null;
   street_address: string | null;
+  lot_area_sqm: number | null;
+  floor_area_sqm: number | null;
+  bedrooms: number | null;
+  bathrooms: number | null;
+  amenities: string[];
   description: string | null;
   images: string[];
   status: 'pending' | 'active' | 'archive' | 'rejected';
   rejection_reason: string | null;
   created_at: string;
-  profiles?: { first_name: string; last_name: string; phone: string | null } | null;
+  profiles?: { first_name: string; last_name: string; phone: string | null; email: string | null; license_number: string | null } | null;
 }
 
 export type ArticleType = 'news' | 'announcement' | 'memorandum';

@@ -38,7 +38,10 @@ export default function ListingApprovals() {
       .eq('status', 'pending')
       .order('created_at', { ascending: false });
     if (error) { setToast({ msg: error.message, err: true }); return; }
-    setRows((data ?? []) as Listing[]);
+    // supabase-js infers the embedded `profiles!broker_id(...)` as an array, but
+    // a to-one FK embed returns a single object at runtime (and the UI reads it
+    // as one). Cast through unknown to reconcile the type with reality.
+    setRows((data ?? []) as unknown as Listing[]);
   }
 
   useEffect(() => { load(); }, []);

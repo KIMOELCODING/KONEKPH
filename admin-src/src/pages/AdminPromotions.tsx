@@ -55,7 +55,7 @@ export default function AdminPromotions() {
   async function load() {
     const { data, error } = await sb
       .from('promoted_slides')
-      .select('*')
+      .select('id, title, company_name, image_url, body, sort_order, is_active, starts_at, ends_at, created_at')
       .order('sort_order', { ascending: true })
       .order('created_at', { ascending: false });
     if (error) { showToast(error.message, true); return; }

@@ -42,7 +42,7 @@ export default function AdminArticles() {
   async function load() {
     const { data, error } = await sb
       .from('articles')
-      .select('*')
+      .select('id, type, title, body, image_url, is_trending, published_at, created_at')
       .order('created_at', { ascending: false });
     if (error) { showToast(error.message, true); return; }
     setRows((data ?? []) as Article[]);

@@ -13,6 +13,7 @@ const NAV = [
   { to: '/listings', icon: 'fa-clipboard-check', label: 'Listing Approvals' },
   { to: '/articles', icon: 'fa-newspaper', label: 'Articles' },
   { to: '/promotions', icon: 'fa-bullhorn', label: 'Promotions' },
+  { to: '/users', icon: 'fa-users', label: 'Users' },
 ];
 
 export default function Shell({ profile, onSignOut, children }: Props) {

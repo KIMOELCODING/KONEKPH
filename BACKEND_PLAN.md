@@ -18,7 +18,7 @@ We're designing the production backend so brokers can sign up, get verified by a
 - Listing quota overflow: **hard block + upgrade modal** (Regular only — Premium upgrade pitch); Premium overflow shows "wait until next month" message.
 - Regular-tier chat/matching/call: **shown but locked**, click triggers upgrade modal.
 - News/Announcements/Memoranda: **admin-only authored**.
-- Email: **Resend** via Edge Function.
+- Email: **SMTP** (Gmail App Password) via Edge Function. *(Was Resend; switched back to SMTP 2026-05-29 after the Resend key was rotated out. Secrets: `SMTP_USER`, `SMTP_PASS`, optional `SMTP_FROM_NAME`/`SMTP_FROM_EMAIL`/`SMTP_HOST`/`SMTP_PORT`.)*
 
 **Draft 28 reality check (2026-05-13):**
 - The Premium page in Draft 28 still advertises **Basic (Free) / Premium ₱999/month / Enterprise (custom)** — copy carried over from earlier drafts. **This is stale UI** — it must be rewritten to Regular vs Premium quarterly + monthly quota + price TBD when wiring begins. (Anchor: search line 182 for `Enterprise` or `₱999/month`.)
@@ -295,7 +295,7 @@ Signup form (frontend)
 
 ADMIN reviews documents in Admin Portal (admin/ React app, BrokerApprovals page — DONE)
   └─ Approves → UPDATE profiles SET is_approved=true, approved_at=now(), approved_by=admin.id
-                Edge Function triggered (DB webhook) → Resend → "Account Ready" email
+                Edge Function triggered (DB webhook) → SMTP → "Account Ready" email
 
 User logs in for the FIRST time after approval
   └─ Edge Function or login-side hook checks: if is_approved AND trial_started_at IS NULL:
@@ -370,7 +370,7 @@ Folder `supabase/functions/` does not exist yet. All seven functions below are t
 
 | Function | Trigger | Purpose |
 |---|---|---|
-| `send-account-ready-email` | DB webhook on `profiles.is_approved` flipping to true | Calls Resend API to send approval email |
+| `send-account-ready-email` | DB webhook on `profiles.is_approved` flipping to true | Sends approval email via SMTP |
 | `paymongo-create-source` | HTTPS POST from frontend (paywall page → GCash/Card button) | Creates PayMongo source for GCash or attaches payment intent for Card; returns checkout URL |
 | `paymongo-webhook` | HTTPS POST from PayMongo | Verifies signature (HMAC-SHA256 with webhook secret), on `payment.paid` event: insert into `payments`, update `profiles.subscription_status='paid'`, `subscription_tier='premium'`, `subscription_ends_at = period_end` |
 | `start-trial-on-first-login` | HTTPS POST from frontend after login | If approved && trial_started_at IS NULL → set trial dates |
@@ -524,7 +524,7 @@ New page `page-matching` to be designed in a separate plan. Backend ready to ser
 - `C:\Users\Predator\Konek-PH\supabase\functions\expire-subscriptions-cron\index.ts` — **TODO**.
 - `C:\Users\Predator\Konek-PH\admin-src\src\pages\AdminArticles.tsx` — **TODO**.
 - `C:\Users\Predator\Konek-PH\admin-src\src\pages\AdminUsers.tsx` — **TODO**.
-- `C:\Users\Predator\Konek-PH\.env.example` — `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `PAYMONGO_SECRET_KEY`, `PAYMONGO_WEBHOOK_SECRET`, `RESEND_API_KEY`.
+- `C:\Users\Predator\Konek-PH\.env.example` — `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `PAYMONGO_SECRET_KEY`, `PAYMONGO_WEBHOOK_SECRET`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM_NAME`.
 
 ---
 

@@ -5,7 +5,7 @@ description: Run a feature-state audit of Konek.PH (broker frontend + admin app 
 
 # Konek.PH feature audit
 
-Produce an up-to-date checklist of what works, what's stubbed, what's buggy, and what could be optimized. The baseline below was last refreshed **2026-05-28**; verify each item against current code before reporting, and update the baseline in this file when fixes land.
+Produce an up-to-date checklist of what works, what's stubbed, what's buggy, and what could be optimized. The baseline below was last refreshed **2026-05-29**; verify each item against current code before reporting, and update the baseline in this file when fixes land.
 
 ## Procedure
 
@@ -47,72 +47,73 @@ Produce an up-to-date checklist of what works, what's stubbed, what's buggy, and
 1. ...
 ```
 
-## Current baseline (2026-05-28)
+## Current baseline (2026-05-29)
 
 ### Working
 **Broker frontend ([Draft 28.html](../../../Draft%2028.html))**
 - Supabase auth (signup/login) + `notify-broker` invoked on new_signup/reapply
+- **Signup form complete** — PRC license # (`su-license`), 1×1 photo + PRC ID upload to `id-documents` (5 MB cap), ToS checkbox enforced ([line 363](../../../Draft%2028.html#L363)), **+ OTP email verification** (`__konekVerifyOtp`)
 - Pending-approval / paywall routing + tier-lock decorators (§7.3 injector)
-- Listings feed + Storage public URLs (24× `sb.from('listings')`)
-- Bookmarks via `saved_listings`
-- Calendar CRUD via `calendar_events`
-- Home content: `articles` + `promoted_slides` + trending
-- Deals counters
+- **Realtime chat** — `sb.channel`, `__konekStartChat({brokerId,listingId})`, optimistic send, mark-read, listing-card attachments
+- **In-app notifications** — broker bell + realtime; home/dashboard badge sync
+- Listings feed + Storage public URLs; bookmarks via `saved_listings`
+- **Listing-detail carousel rebuilt from real photos** (`populateDetail` → `#ldsh-main-img` + `.ld-sh-thumbs`)
+- **Featured hero slideshow rebuilt from real listings** (`renderFeaturedSlideshow` in `renderListings`; prefers `featured`, falls back to recent-with-image, hides if none)
+- Listing image upload validation (5 MB + JPEG/PNG/WebP)
+- Calendar CRUD; calendar "today" dynamic (`var calYr = new Date().getFullYear()...`)
+- Home content: `articles` + `promoted_slides` + trending; deals counters
+- Dashboard real MoM trend pills + recent-listings filter chips
 - Listing view-counter (`bump_view_count` RPC)
-- PSGC dropdowns DB-driven (cascade region→province→city→barangay)
-- **PSGC dropdowns cached in localStorage** under `konek.psgc.v1.*` keys
+- PSGC cascade dropdowns + localStorage cache (`konek.psgc.v1.*`)
 - Listing Accuracy Agreement + Upgrade modal
-- Calendar "today" is dynamic (`var calYr = new Date().getFullYear()...`)
-- `__konekLoadData` has 30s TTL memoization; mutation callers pass `{force:true}`
+- `__konekLoadData` HOT (30s) / WARM (5min) TTL split
 
 **Admin app ([admin-src/](../../../admin-src/))**
 - Login + resilient auth (timeout fallbacks)
 - BrokerApprovals + doc viewer + email notify
 - ListingApprovals + detail modal + reject reason
+- **RejectModal component replaces `prompt()`** in both approval pages
 - AdminArticles, AdminPromotions
+- **Routes lazy-loaded** (React.lazy + Suspense)
 - Production build strips `console.*` and `debugger` (Vite esbuild drop)
-- Admin selects narrowed to explicit column lists
 
 **Backend (`supabase/`)**
 - 0001 base schema + RLS (profiles/listings/notifications/PSGC + 5 triggers)
-- 0003 messaging/billing schema + premium-gate triggers
-- 0003 home content (articles policies + promoted_slides)
-- 0005 deals, 0006 bump_view_count, 0006 relax_listing_gate
-- 0007 psgc_barangays + 0008 clean seed
-- `notify-broker` Edge Function (6 actions, Gmail SMTP)
+- 0003 messaging/billing schema + indexes (incl. `messages(conversation_id, created_at desc)` ✅) + premium-gate triggers
+- 0005 deals, 0006 bump_view_count, 0007 psgc_barangays, 0008 clean seed, 0009 listings delete-own, 0010 home content, 0011 relax listing gate
+- 0012 tighten admin notif SELECT, 0013 enforce ToS (BEFORE INSERT), 0014 relax chat premium gate + `notify_message_recipient` trigger
+- `notify-broker` Edge Function (admin fan-out, Gmail SMTP)
 
 ### Not wired
-- Realtime chat UI (`sb.channel(` absent in broker HTML; schema + RLS exist)
-- PayMongo billing — placeholder `alert('PayMongo integration pending …')` at [Draft 28.html](../../../Draft%2028.html); no `paymongo-create-source` Edge Function
-- Trial/subscription enforcement relaxed in [0006_relax_listing_gate.sql](../../../supabase/migrations/0006_relax_listing_gate.sql)
-- Premium page copy still shows ₱999/Enterprise (~15 hits)
-- Signup form missing PRC #, 1×1 photo, PRC ID upload, ToS checkbox
+- PayMongo billing — placeholder `alert` at [Draft 28.html:1667](../../../Draft%2028.html#L1667); no `paymongo-create-source` Edge Function
+- Trial/subscription enforcement relaxed in [0011_relax_listing_gate.sql](../../../supabase/migrations/0011_relax_listing_gate.sql) (intentional deferral)
+- Premium page copy still shows ₱999/Enterprise (~3 hits)
+- Broker-profile "Message" button (chat plumbing exists, no UI entry point)
+- Chat photo attachments (schema has `attachment_image_url`; no `message-attachments` bucket/uploader)
 - AdminUsers page never created
 - Broker matching by service area (schema only)
 - Referrals UI (schema only)
 - Audit-log surfacing
 
 ### Bugs / risks
-1. **Duplicate migration prefixes** — `0003_home_content` vs `0003_messaging_billing`; `0006_bump_view_count` vs `0006_relax_listing_gate`. Order-fragile on fresh DB rebuild
-2. `prompt()` for rejection reasons in [BrokerApprovals.tsx:68](../../../admin-src/src/pages/BrokerApprovals.tsx#L68) and [ListingApprovals.tsx:75](../../../admin-src/src/pages/ListingApprovals.tsx#L75) — bad mobile UX, blocks E2E
-3. PSGC override polling (500ms × 20) in `k-psgc-db` — defensive but smelly; delete once stable
-4. `notify-broker` SMTP has no retry queue; Gmail rotation breaks approvals silently
-5. `is_admin()` policies not re-verified after 0003 additions
-6. `enforce_premium_for_chat` only server-side; Regular-tier UI doesn't block composer input
+1. `select('*')` in [AdminArticles.tsx:45](../../../admin-src/src/pages/AdminArticles.tsx#L45) + [AdminPromotions.tsx:58](../../../admin-src/src/pages/AdminPromotions.tsx#L58) — wide selects (BrokerApprovals/ListingApprovals already narrowed)
+2. ~15 `alert()` calls in broker frontend — poor UX, blocks E2E
+3. Messages search input binds to vanished mock data — no-op
+4. **🔑 Exposed Resend API key `re_RJw3tY6P_...`** still live — delete at resend.com/api-keys (standing reminder)
+5. `notify-broker` SMTP has no retry queue; Gmail rotation breaks approvals silently
+6. PSGC override polling (500ms × 20) in `k-psgc-db` — defensive but smelly; delete once stable
+7. `is_admin()` policies not re-verified after 0012–0014 additions
 
 ### Optimizations remaining
-- Bundle / gzip-precompress 5.3MB HTML; lazy-load line-174 base64 assets (biggest TTI win)
-- Replace base64 assets with Storage URLs
-- Listings keyset pagination + infinite scroll
-- Verify `messages(conversation_id, created_at)` index for realtime tail
+- Lazy-load / move line-174 base64 assets (4.8 MB) to Storage URLs (biggest TTI win on 5.3 MB HTML)
+- Listings keyset pagination + infinite scroll (still flat-limited)
+- Supabase image transforms for grid + carousel thumbnails (download at thumb size)
 - Verify service-worker registration (PWA install)
 
-### Done this session (2026-05-28)
-- Calendar unhardcoded (`var calYr = new Date().getFullYear()...`)
-- PSGC localStorage cache (`konek.psgc.v1.*` keys; `__konekPsgcClear()` to invalidate)
-- 30s memoization on `__konekLoadData` with `{force:true}` opt for mutation callers
-- Admin `select('*')` narrowed to explicit column lists
-- Vite prod build drops `console.*` and `debugger`
+### Done this session (2026-05-29)
+- Listing-detail carousel wired to real listing photos (was hardcoded Unsplash thumbnails)
+- Featured listings hero slideshow wired to real listings (was 5 mock slides)
+- Verified: signup form complete (PRC/photo/PRC ID/ToS/OTP), migration prefix collisions resolved (0010/0011), admin RejectModal replaces prompt(), messages index present, calYr dynamic
 
 ## Notes for the runner
 

@@ -1,0 +1,2 @@
+# Keep shell scripts LF so they run on Cloudflare's Linux build environment.
+*.sh text eol=lf

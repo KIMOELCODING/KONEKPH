@@ -1,7 +1,7 @@
 {
   "name": "Konek.PH — Broker Dashboard",
   "short_name": "Konek",
-  "start_url": "/Draft%2028.html",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",

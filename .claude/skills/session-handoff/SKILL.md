@@ -29,7 +29,7 @@ Generate a markdown summary the user (or future-Claude) can paste at the start o
    <what the user needs to manually verify, with URLs:
     - Function logs: https://supabase.com/dashboard/project/ffewjmucspcswdcxouvc/functions/<fn>/logs
     - Admin: http://127.0.0.1:3030/admin/
-    - Broker: open Draft 28.html>
+    - Broker: open index.html>
 
    ## 📋 Next up — Phase X
    <next concrete tasks from BACKEND_PLAN.md §12 build order or user's stated plan>
@@ -38,7 +38,7 @@ Generate a markdown summary the user (or future-Claude) can paste at the start o
    <anything deferred, in priority order>
 
    ## 🔑 Key constraints to remember
-   - Draft 28.html: never Read line 174 (4.8MB base64) or 182 (505KB JS) whole — use Grep anchors + Edit
+   - index.html: never Read line 174 (4.8MB base64) or 182 (505KB JS) whole — use Grep anchors + Edit
    - Never edit Draft 19.html (archive)
    - No build step for broker frontend — stays static HTML
    - Supabase deploy: `& "C:\supabase\supabase.exe" functions deploy <fn>` (full path required)

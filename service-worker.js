@@ -7,7 +7,7 @@
 const VERSION = 'konek-v1';
 const SHELL = [
   '/',
-  '/Draft%2028.html',
+  '/index.html',
   '/manifest.webmanifest',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
@@ -75,7 +75,7 @@ self.addEventListener('fetch', (event) => {
           caches.open(VERSION).then((cache) => cache.put(req, copy)).catch(() => {});
           return res;
         })
-        .catch(() => caches.match('/Draft%2028.html'));
+        .catch(() => caches.match('/index.html'));
     })
   );
 });

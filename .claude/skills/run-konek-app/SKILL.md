@@ -1,6 +1,6 @@
 ---
 name: run-konek-app
-description: Launch the Konek.PH broker frontend (Draft 28.html) and the admin React app locally. Use when the user says "run my web app", "run the app", "run the admin", "start the dev server", or any variant of launching Konek locally.
+description: Launch the Konek.PH broker frontend (index.html) and the admin React app locally. Use when the user says "run my web app", "run the app", "run the admin", "start the dev server", or any variant of launching Konek locally.
 ---
 
 # Run Konek.PH locally
@@ -19,7 +19,7 @@ Two things to launch: the static broker frontend (open in browser) and the admin
 
 3. **Open the broker frontend** in the default browser:
    ```powershell
-   start "Draft 28.html"
+   start "index.html"
    ```
 
 4. Report back: broker file opened + admin URL + admin login (`konekph2026@gmail.com`).

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Konek.ph** is a Philippine real estate broker dashboard. Current state of the repo:
 
-- `Draft 28.html` — **active** frontend (~185 lines, ~5.3 MB). Minified onto two huge lines: line 174 ≈ 4.8 MB of base64 assets, line 182 ≈ 505 KB of HTML/CSS/JS. Navigate by **string-anchor grep**, never line numbers. A `<style id="k-net-new-ui">` + `<script id="k-net-new-ui-js">` pair is appended just before `</body>` to inject the §7.3 net-new UI (see below).
+- `index.html` — **active** frontend (~185 lines, ~5.3 MB). Minified onto two huge lines: line 174 ≈ 4.8 MB of base64 assets, line 182 ≈ 505 KB of HTML/CSS/JS. Navigate by **string-anchor grep**, never line numbers. A `<style id="k-net-new-ui">` + `<script id="k-net-new-ui-js">` pair is appended just before `</body>` to inject the §7.3 net-new UI (see below).
 - `Draft 19.html` — **archive**; do not edit. Kept for diffing against the older single-file shape.
 - `BACKEND_PLAN.md` — production backend design (Supabase + Cloudflare + PayMongo). Carries a per-area `Status: DONE / PARTIAL / TODO` marker so you can scan progress without diffing files. Schema for `profiles`, `listings`, `notifications`, PSGC + property_types lookups, several triggers, and most RLS are already implemented; messaging/calendar/articles/payments/referrals/audit/conversation-states schema + all 7 Edge Functions are still pending.
 - `supabase/migrations/0001_initial_schema.sql` (282 lines), `supabase/migrations/0002_seed_psgc.sql` (72 lines), `supabase/storage_buckets.sql` (76 lines) — partial backend.
@@ -18,10 +18,10 @@ Demo login (mock, client-side only): `admin@konek.ph` / `admin123`.
 
 ## Development Workflow
 
-- **Run the broker frontend**: open `Draft 28.html` directly in a browser. PowerShell: `start "Draft 28.html"`. No build, no install, no server.
+- **Run the broker frontend**: open `index.html` directly in a browser. PowerShell: `start "index.html"`. No build, no install, no server.
 - **Run the admin app (dev)**: `npm --prefix admin-src install` then `npm --prefix admin-src run dev`. Production build output is committed at `admin/`.
 - External CDN deps: Google Fonts (Inter, Plus Jakarta Sans), Font Awesome 6.5.0, Chart.js 4.4.0, (and `@supabase/supabase-js` once it's wired into the broker HTML).
-- No test suite, no lint config. Validate broker-frontend changes by reloading `Draft 28.html` in a browser.
+- No test suite, no lint config. Validate broker-frontend changes by reloading `index.html` in a browser.
 - "Today" inside the broker app is still hardcoded to **2026-05-06** for calendar/event rendering — don't conflate with the real date when reasoning about calendar code.
 
 ## Known stale UI to fix when wiring the backend
@@ -30,7 +30,7 @@ Demo login (mock, client-side only): `admin@konek.ph` / `admin123`.
 - Signup form (anchors: `su-fname`, `su-lname`, `su-email`, `su-phone`, `su-pw`, `su-pw2`) is missing **PRC license #**, **1×1 photo upload**, **PRC ID upload**, **scrolled-to-bottom ToS checkbox** — all required by the plan. Schema columns `profiles.id_photo_url`, `profiles.prc_id_url`, `profiles.tos_accepted_at` are currently nullable in 0001 to allow signups during this gap; tighten to `not null` once the form is extended.
 - Calendar "today" hardcoded to 2026-05-06 (`calYr`, `calMo`, `CAL_EVENTS=`). Unhardcode when wiring `calendar_events`.
 
-## Frontend Architecture (`Draft 28.html`)
+## Frontend Architecture (`index.html`)
 
 ### Page/Navigation system
 
@@ -102,11 +102,11 @@ The backend is **partially** built. Treat `BACKEND_PLAN.md` as the spec and cons
 - Two tiers: Regular and Premium. **Listing quota refreshes monthly** for both tiers, independent of billing. Tier defaults: Regular = 10/month, Premium = 15/month (numbers TBD). Premium also unlocks chat + matching + call; Regular sees these as locked → upgrade modal.
 - Listings: admin-approved per-listing; editing a listing as a non-admin resets `status` to `'pending'` via trigger.
 - Realtime chat uses Supabase Realtime on `messages`; gated to Premium on both ends via RLS + trigger.
-- Pending work tracked in `BACKEND_PLAN.md` §12 build order: next-up items are migration `0003_messaging_billing.sql`, then Edge Functions, then wiring `doSignup`/`doLogin`/`doLogout` in `Draft 28.html`.
+- Pending work tracked in `BACKEND_PLAN.md` §12 build order: next-up items are migration `0003_messaging_billing.sql`, then Edge Functions, then wiring `doSignup`/`doLogin`/`doLogout` in `index.html`.
 
 ## Working in this repo
 
-- Prefer surgical, anchor-based edits to `Draft 28.html`. Never try to Read line 174 or 182 whole — use Grep with literal substrings to locate, then Edit with unique surrounding context.
+- Prefer surgical, anchor-based edits to `index.html`. Never try to Read line 174 or 182 whole — use Grep with literal substrings to locate, then Edit with unique surrounding context.
 - Do **not** introduce a build step, framework, or package manager to the broker frontend. The "open the file in a browser" workflow is a deliberate constraint.
 - The admin app (`admin-src/`) is a separate Vite/React/TS project — normal `npm` workflow applies there.
 - When adding new broker UI listed in `BACKEND_PLAN.md` §7.3, follow the existing `<div class="page">` + `goTo` pattern and `.overlay`/`.modal` pattern. The §7.3 injector at the end of `<body>` shows a working example (DOM injection + PAGES extension + click-capture for tier locks).

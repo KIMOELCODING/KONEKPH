@@ -1,7 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Bash(powershell -NoProfile -Command \"\\(Get-Content 'C:\\\\Users\\\\Predator\\\\Downloads\\\\Draft 28.html' -Raw\\) | Select-String -AllMatches '\\(supabase|createClient|fetch|PayMongo|paymongo\\)' | Select-Object -ExpandProperty Matches | Select-Object -First 20\")"
+      "Bash(powershell -NoProfile -Command \"\\(Get-Content 'C:\\\\Users\\\\Predator\\\\Downloads\\\\index.html' -Raw\\) | Select-String -AllMatches '\\(supabase|createClient|fetch|PayMongo|paymongo\\)' | Select-Object -ExpandProperty Matches | Select-Object -First 20\")"
     ]
   }
 }

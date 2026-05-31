@@ -1,11 +1,11 @@
 ---
 name: ship-konek-change
-description: Make a change to Draft 28.html, the admin app, or Supabase RLS/functions AND verify it actually works in a real browser before declaring done. Use whenever the user asks for a frontend bug fix, routing change, auth-flow fix, RLS update, or any change whose correctness depends on browser-rendered behavior (not just "the Edit returned ok"). Triggers: "fix the signup flow", "make sure pending-approval routes correctly", "the reapply overlay isn't showing", "the email isn't sending", "deploy and test notify-broker".
+description: Make a change to index.html, the admin app, or Supabase RLS/functions AND verify it actually works in a real browser before declaring done. Use whenever the user asks for a frontend bug fix, routing change, auth-flow fix, RLS update, or any change whose correctness depends on browser-rendered behavior (not just "the Edit returned ok"). Triggers: "fix the signup flow", "make sure pending-approval routes correctly", "the reapply overlay isn't showing", "the email isn't sending", "deploy and test notify-broker".
 ---
 
 # Ship a Konek.PH change (generate + verify)
 
-A Konek change is not "done" when the Edit tool returns ok. The minified `Draft 28.html` blob, the §7.3 injector wrapping order, Supabase RLS on `anon` vs `authenticated`, and browser caches all silently swallow changes. You must verify in a real browser before reporting back.
+A Konek change is not "done" when the Edit tool returns ok. The minified `index.html` blob, the §7.3 injector wrapping order, Supabase RLS on `anon` vs `authenticated`, and browser caches all silently swallow changes. You must verify in a real browser before reporting back.
 
 ## Examples of when to use this
 
@@ -27,11 +27,11 @@ A Konek change is not "done" when the Edit tool returns ok. The minified `Draft 
 
 Pick the verification strategy that matches the change:
 
-**Frontend changes to `Draft 28.html`:**
+**Frontend changes to `index.html`:**
 1. Confirm the change is actually in the file: Grep for a unique string from the new code and confirm it appears.
 2. Launch the app via the `run-konek-app` skill (admin on port 3030, broker HTML in browser).
 3. **If a Playwright MCP is configured:** drive a real browser session reproducing the user's flow — sign up / log in / click the button that was broken. Capture `console` and `pageerror` events. Assert the right page is `.active` (e.g. `document.querySelector('#app-shell .page.active')?.id === 'page-pending-approval'`).
-4. **If no browser MCP:** explicitly tell the user "I cannot drive a browser from here. The change is in the file at `Draft 28.html`. Please hard-refresh (Ctrl+Shift+R) and confirm <specific assertion>." Do NOT claim the fix works.
+4. **If no browser MCP:** explicitly tell the user "I cannot drive a browser from here. The change is in the file at `index.html`. Please hard-refresh (Ctrl+Shift+R) and confirm <specific assertion>." Do NOT claim the fix works.
 
 **Supabase RLS / schema changes:**
 1. Run a probe query as the target role to confirm the policy permits/denies what's intended. Use the Supabase SQL editor URL or — if a Supabase MCP is configured — run `select` directly with the role JWT.

@@ -2,11 +2,11 @@
 
 ## Context
 
-Konek.ph's frontend is now `C:\Users\Predator\Konek-PH\Draft 28.html` (5.3 MB, 185 lines — the bulk of the app is minified onto two lines: line 174 ≈ 4.8 MB of base64 assets, line 182 ≈ 505 KB of HTML/CSS/JS). The previous draft, `Draft 19.html`, is retained alongside as an archive. Demo login (`admin@konek.ph` / `admin123`) is still a pure client-side mock.
+Konek.ph's frontend is now `C:\Users\Predator\Konek-PH\index.html` (5.3 MB, 185 lines — the bulk of the app is minified onto two lines: line 174 ≈ 4.8 MB of base64 assets, line 182 ≈ 505 KB of HTML/CSS/JS). The previous draft, `Draft 19.html`, is retained alongside as an archive. Demo login (`admin@konek.ph` / `admin123`) is still a pure client-side mock.
 
 We're designing the production backend so brokers can sign up, get verified by an admin, trial for 3 days, pay quarterly via PayMongo, post listings (admin-approved), chat in realtime (Premium only), match with other brokers by service area, and consume admin-curated news.
 
-**Why now:** the frontend is stable enough to wire to real data, the broker-facing §7.3 screens (Pending Approval, Paywall, Listing Accuracy Agreement modal, Upgrade modal, tier locks) are now present in `Draft 28.html`, and the admin React app under `admin/` already covers broker + listing approvals. The remaining backend work is well-defined.
+**Why now:** the frontend is stable enough to wire to real data, the broker-facing §7.3 screens (Pending Approval, Paywall, Listing Accuracy Agreement modal, Upgrade modal, tier locks) are now present in `index.html`, and the admin React app under `admin/` already covers broker + listing approvals. The remaining backend work is well-defined.
 
 **Confirmed decisions:**
 - Stack: **Supabase** (Postgres + Auth + Storage + Realtime + Edge Functions) behind **Cloudflare** (DNS proxy, CDN, DDoS).
@@ -26,7 +26,7 @@ We're designing the production backend so brokers can sign up, get verified by a
 - The duplicate `id="page-listing-detail"` bug from Draft 19 is **fixed** in Draft 28.
 - `goTo('contacts')` no longer appears in Draft 28 — the chat → broker-profile transition uses `goTo('broker')` correctly.
 - Calendar "today" is still hardcoded to 2026-05-06 (events keyed `'2026-4-15'…'2026-5-22'`). Replace with `new Date()` when wiring to `calendar_events`.
-- `Draft 28.html` PAGES set (15 keys): `home, dashboard, listings, your-listings, bookmarks, listing-detail, messages, broker, calendar, profile, settings, help, premium, notifications, article`. Plus two added by the §7.3 injector at the bottom of the file: `pending-approval`, `paywall`.
+- `index.html` PAGES set (15 keys): `home, dashboard, listings, your-listings, bookmarks, listing-detail, messages, broker, calendar, profile, settings, help, premium, notifications, article`. Plus two added by the §7.3 injector at the bottom of the file: `pending-approval`, `paywall`.
 - §7.3 broker-facing UI (Pending Approval, Paywall, Listing Accuracy Agreement modal, Upgrade modal, tier-lock icons on Messages + Call) is **present** in Draft 28 — see the `<style id="k-net-new-ui">` and `<script id="k-net-new-ui-js">` blocks appended at the end of `<body>`. Currently gated by a `window.__currentUser` placeholder until real auth lands.
 
 ---
@@ -40,7 +40,7 @@ We're designing the production backend so brokers can sign up, get verified by a
 | Storage buckets | `supabase/storage_buckets.sql` (76 lines) | PARTIAL | Has `id-documents` (private), `avatars` (public), `listing-images` (public) with owner/admin policies. **Missing**: `article-images`, `message-attachments`. |
 | Edge Functions | `supabase/functions/` | TODO | Folder doesn't exist. All 7 functions still to write. |
 | Admin Portal (React) | `admin/` (built bundle) + `admin-src/` (source) | PARTIAL | Vite + React 18 + TS + React Router + Supabase JS. Pages: `Login`, `BrokerApprovals`, `ListingApprovals`. **Missing**: `AdminArticles`, `AdminUsers`. |
-| Broker frontend (active) | `Draft 28.html` | PARTIAL | §7.3 net-new UI present (Pending Approval, Paywall, Accuracy modal, Upgrade modal, tier locks). Supabase not wired. Premium-page copy stale. Signup form missing PRC/photo/ToS. |
+| Broker frontend (active) | `index.html` | PARTIAL | §7.3 net-new UI present (Pending Approval, Paywall, Accuracy modal, Upgrade modal, tier locks). Supabase not wired. Premium-page copy stale. Signup form missing PRC/photo/ToS. |
 | Broker frontend (archive) | `Draft 19.html` | Archived | Keep for reference; do not edit. |
 | Frontend config | `config.js` | DONE | Gitignored. Points to live Supabase project. |
 | PWA shell | `manifest.webmanifest`, `service-worker.js`, `icons/` | DONE | Not part of backend plan. |
@@ -382,11 +382,11 @@ Folder `supabase/functions/` does not exist yet. All seven functions below are t
 
 ---
 
-## 7. Frontend Integration (Draft 28.html)
+## 7. Frontend Integration (index.html)
 
 Wire the existing HTML/CSS/JS to Supabase. **No layout changes** — only swap mock data for live calls. Tier-gating overlays are already injected by the §7.3 script block.
 
-Because Draft 28's app code is minified onto one line (line 182), navigate with **string-anchor grep** rather than line numbers: e.g., `Grep -path 'Draft 28.html' -pattern 'function doSignup'`.
+Because Draft 28's app code is minified onto one line (line 182), navigate with **string-anchor grep** rather than line numbers: e.g., `Grep -path 'index.html' -pattern 'function doSignup'`.
 
 ### 7.1 Add Supabase JS SDK — **Status: TODO**
 Inside `<head>` after Chart.js:
@@ -424,7 +424,7 @@ The frontend's `PAGES` object (anchor: search `const PAGES =` or `PAGES={`) regi
 
 ### 7.2 Function-level rewrites — **Status: TODO**
 
-Anchors below are grep targets within `Draft 28.html` line 182.
+Anchors below are grep targets within `index.html` line 182.
 
 | Anchor | New behavior |
 |---|---|
@@ -441,7 +441,7 @@ Anchors below are grep targets within `Draft 28.html` line 182.
 
 ### 7.3 New UI additions — **Status: DONE (broker side), PARTIAL (admin portal)**
 
-Implemented by `<style id="k-net-new-ui">` and `<script id="k-net-new-ui-js">` appended to the end of `<body>` in `Draft 28.html`. The script injects DOM at `DOMContentLoaded`, extends `window.PAGES`, hooks the existing `doLogin`/`doLogout`, and intercepts locked clicks. Until real auth lands, behavior is gated by a `window.__currentUser` placeholder (default `{ subscription_tier: 'regular', subscription_status: 'trial', is_approved: true }`) so locks are visible in the demo.
+Implemented by `<style id="k-net-new-ui">` and `<script id="k-net-new-ui-js">` appended to the end of `<body>` in `index.html`. The script injects DOM at `DOMContentLoaded`, extends `window.PAGES`, hooks the existing `doLogin`/`doLogout`, and intercepts locked clicks. Until real auth lands, behavior is gated by a `window.__currentUser` placeholder (default `{ subscription_tier: 'regular', subscription_status: 'trial', is_approved: true }`) so locks are visible in the demo.
 
 1. **Pending Approval screen** (`page-pending-approval`) — full-page block: envelope icon, headline "Your account is under review", sub "We'll email you once an admin verifies your PRC ID and 1×1 photo (typically <24 hours).", "Sign out" button → `doLogout()`. Auto-shown after login when `__currentUser.is_approved === false`.
 2. **Paywall screen** (`page-paywall`) — two cards: Regular (current/free during trial) and Premium (₱TBD / 90 days). Premium card has GCash + Card buttons → currently `alert('PayMongo integration pending')`; wire to `paymongo-create-source` Edge Function once built. Auto-shown when trial/subscription expired.
@@ -491,7 +491,7 @@ New page `page-matching` to be designed in a separate plan. Backend ready to ser
 ## 10. Cloudflare Configuration — **Status: TODO**
 
 ### 10.1 Cloudflare Pages (static frontend host)
-- Host `Draft 28.html` (renamed to `index.html`) on **Cloudflare Pages**, served at `app.konek.ph`.
+- Host `index.html` (renamed to `index.html`) on **Cloudflare Pages**, served at `app.konek.ph`.
 - Chosen over Vercel/Render because we already use Cloudflare for CDN/WAF — single vendor, unlimited bandwidth on free tier, same edge network as listing-image CDN.
 - No build step. Deploy via Git push (connect repo) or direct upload via `wrangler pages deploy`.
 - Preview URLs auto-generated per branch for QA before promoting to production.
@@ -510,7 +510,7 @@ New page `page-matching` to be designed in a separate plan. Backend ready to ser
 
 ## 11. Critical Files Touched
 
-- `C:\Users\Predator\Konek-PH\Draft 28.html` — wire up SDK, replace mock data, rewrite the Premium page copy (search `Enterprise` or `₱999/month`), add PRC license / 1×1 photo / PRC ID / ToS fields to the signup form (anchor: `su-fname`), unhardcode calendar "today" (anchor: `calYr`, `calMo`). New broker UI (Pending Approval, Paywall, Accuracy modal, Upgrade modal, tier locks) is already present via the appended `<style id="k-net-new-ui">` + `<script id="k-net-new-ui-js">` blocks.
+- `C:\Users\Predator\Konek-PH\index.html` — wire up SDK, replace mock data, rewrite the Premium page copy (search `Enterprise` or `₱999/month`), add PRC license / 1×1 photo / PRC ID / ToS fields to the signup form (anchor: `su-fname`), unhardcode calendar "today" (anchor: `calYr`, `calMo`). New broker UI (Pending Approval, Paywall, Accuracy modal, Upgrade modal, tier locks) is already present via the appended `<style id="k-net-new-ui">` + `<script id="k-net-new-ui-js">` blocks.
 - `C:\Users\Predator\Konek-PH\supabase\migrations\0001_initial_schema.sql` — DONE for profiles/listings/notifications/PSGC/property_types + 5 triggers + most RLS.
 - `C:\Users\Predator\Konek-PH\supabase\migrations\0002_seed_psgc.sql` — DONE for curated PSGC + property types.
 - `C:\Users\Predator\Konek-PH\supabase\storage_buckets.sql` — DONE for id-documents/avatars/listing-images.
@@ -537,7 +537,7 @@ Items already done are marked ✔ for completeness.
 3. ✔ Admin React app: Login + BrokerApprovals + ListingApprovals pages.
 4. **Next**: Write `0003_messaging_billing.sql` covering `saved_listings`, `conversations`, `messages`, `calendar_events`, `articles`, `payments`, `referrals`, `audit_log`, `conversation_states` + their triggers + RLS.
 5. Create `supabase/functions/send-account-ready-email` + Resend integration.
-6. Wire `doSignup` / `doLogin` / `doLogout` in `Draft 28.html` to Supabase Auth; the §7.3 wrapper already routes to `pending-approval` / `paywall` based on `__currentUser`. Replace placeholder with real profile fetch.
+6. Wire `doSignup` / `doLogin` / `doLogout` in `index.html` to Supabase Auth; the §7.3 wrapper already routes to `pending-approval` / `paywall` based on `__currentUser`. Replace placeholder with real profile fetch.
 7. Extend signup form with PRC license / 1×1 photo / PRC ID / ToS checkbox (anchor: `su-fname`). Tighten `id_photo_url`, `prc_id_url`, `tos_accepted_at` to `not null` in profiles.
 8. Rewrite Premium page copy (anchor: `Enterprise` / `₱999/month`) to Regular vs Premium quarterly with price TBD.
 9. Replace `LISTINGS_DATA` + `YOUR_LISTINGS` with live queries; the Accuracy Agreement modal (§7.3) is already wired between submit and the original handler.

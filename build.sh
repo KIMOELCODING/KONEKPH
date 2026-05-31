@@ -14,6 +14,15 @@ cp index.html manifest.webmanifest service-worker.js _headers dist/
 cp -r icons dist/icons
 cp -r admin dist/admin
 
+# 2b) Stamp a unique service-worker cache VERSION per deploy. Without this the
+#     hardcoded 'konek-v1' never changes, so the activate step never clears the
+#     old cache and returning visitors stay on a stale build. A new VERSION each
+#     deploy (git SHA, or epoch as fallback) rotates the cache → returning users
+#     pick up the latest shell on their next load.
+BUILD_ID="$(git rev-parse --short HEAD 2>/dev/null || date +%s)"
+sed -i "s/const VERSION = '[^']*';/const VERSION = 'konek-${BUILD_ID}';/" dist/service-worker.js
+echo "Stamped service-worker VERSION = konek-${BUILD_ID}"
+
 # 3) Generate config.js for BOTH portals from Pages env vars (never committed).
 #    Broker loads "config.js" (root); admin loads "/admin/config.js".
 printf "window.SUPABASE_URL='%s';\nwindow.SUPABASE_ANON_KEY='%s';\n" \

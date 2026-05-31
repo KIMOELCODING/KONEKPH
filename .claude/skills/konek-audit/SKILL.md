@@ -100,10 +100,8 @@ Produce an up-to-date checklist of what works, what's stubbed, what's buggy, and
 - Audit-log surfacing
 
 ### Bugs / risks
-1. ~15 `alert()` calls in broker frontend — poor UX, blocks E2E
-2. Messages search input binds to vanished mock data — no-op
-3. `notify-broker` SMTP has no retry queue; Gmail rotation breaks approvals silently
-4. PSGC override polling (500ms × 20) in `k-psgc-db` — defensive but smelly; delete once stable
+1. PSGC override polling (~500ms loop) in `k-psgc-db` (~line 6291) — defensive against a load-order race that would break location dropdowns; **leave until post-launch stability is confirmed** (removing it has no user-facing upside).
+   *(Verified 2026-05-31: prior "bug" entries cleared — `alert()` popups replaced by toast helper (only a DOM-not-ready fallback `alert` remains, ~line 253); Messages search now filters real `.kmsg-item` rows via `filterConvList`/`wireConvSearch` (~lines 6156/6170), mock `chat-suggest` dropdown suppressed; `notify-broker` `sendEmail` has 2-attempt retry + returns 502 on failure + writes the in-app admin notification before sending so failures aren't silent — a durable queue is intentionally out of scope at this scale.)*
 
 ### Optimizations remaining
 - Lazy-load / move line-174 base64 assets (4.8 MB) to Storage URLs (biggest TTI win on 5.3 MB HTML)

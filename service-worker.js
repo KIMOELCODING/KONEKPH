@@ -64,7 +64,34 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.startsWith('/admin')) return;
   if (url.pathname.endsWith('/config.js')) return;
 
-  // Cache-first with network fallback (and lazy fill for CDN assets)
+  // App shell (HTML / navigations): NETWORK-FIRST. The entire app lives in
+  // index.html, so serving a cached shell would freeze returning visitors on
+  // an old build after every deploy. Going to the network first means an online
+  // user always gets the latest app (incl. realtime/chat fixes); the cached
+  // shell is only the offline fallback.
+  const isShell =
+    req.mode === 'navigate' ||
+    req.destination === 'document' ||
+    url.pathname === '/' ||
+    url.pathname.endsWith('/index.html');
+  if (isShell) {
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          if (res && res.status === 200 && res.type !== 'opaqueredirect') {
+            const copy = res.clone();
+            caches.open(VERSION).then((cache) => cache.put(req, copy)).catch(() => {});
+          }
+          return res;
+        })
+        .catch(() => caches.match(req).then((c) => c || caches.match('/index.html')))
+    );
+    return;
+  }
+
+  // Everything else (CDN assets, icons, fonts): cache-first with lazy fill.
+  // These are immutable enough that staleness is harmless, and per-deploy
+  // VERSION rotation (stamped by build.sh) clears them on each release.
   event.respondWith(
     caches.match(req).then((cached) => {
       if (cached) return cached;

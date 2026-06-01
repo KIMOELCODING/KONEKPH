@@ -65,7 +65,12 @@ create trigger messages_block_contact_info
 -- ============================================================
 -- Identical to the 0016 view MINUS the `email` column. Self-reads of one's own
 -- email still work via profiles_select_own (Settings page is unaffected).
-create or replace view public.broker_directory as
+--
+-- NOTE: `create or replace view` cannot DROP a column (Postgres 42P16), and the
+-- 0016 view still has `email`, so we DROP then CREATE. No other object depends
+-- on this view, so a plain drop (no cascade) is safe.
+drop view if exists public.broker_directory;
+create view public.broker_directory as
   select id, first_name, last_name, avatar_url, title, agency,
          license_number, bio, specialties, service_areas, closed_deals_count,
          created_at

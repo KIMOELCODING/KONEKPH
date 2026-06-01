@@ -109,7 +109,12 @@ Produce an up-to-date checklist of what works, what's stubbed, what's buggy, and
 - Supabase image transforms for grid + carousel thumbnails (download at thumb size)
 - Verify service-worker registration (PWA install)
 
-### Done this session (2026-05-31)
+### Done this session (2026-06-01)
+- **Calendar "today" fully dynamic** — `renderWeekView` was the last holdout (hardcoded `new Date(2026,4,6)` anchor + `day.getDate()===6 && getMonth()===4` highlight). Now `new Date()` anchor + real date/month/year highlight comparison, matching mini-cal/big-cal.
+- Migration 0025 `visit_stats_distinct` applied (1 account = 1 distinct visit; was double-counting). Migrations 0019–0025 all present, no dup prefixes.
+- Verified: no real TODO/FIXME in index.html (matches are base64 blob); service-worker registration present; admin `prompt()`/`alert()` gone; only by-id single-row `select('*')` remains in App.tsx:51 (OK).
+
+### Done prior session (2026-05-31)
 - AdminUsers page shipped; admin `prompt()` and wide `select('*')` (AdminArticles/AdminPromotions) removed
 - Migration 0015 `listings.details` JSONB applied — per-property-type spec fields now persisted + rendered
 - Edit-listing fixes: case-insensitive PSGC prefill (`setSelByName`); negatives blocked (`min=0`) + dropped on save + hidden on render

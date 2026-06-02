@@ -63,7 +63,7 @@ export default function ListingApprovals() {
         user_id: l.broker_id,
         type: 'listing_approved',
         title: 'Listing approved',
-        body: `${l.title} is now live on Konek.PH.`,
+        body: `${l.title} is now live on ProList.`,
       });
       sb.functions.invoke('notify-broker', {
         body: { broker_id: l.broker_id, action: 'listing_approved', listing_id: l.id },

@@ -34,9 +34,9 @@ export default function Login() {
     <div className="login-shell">
       <form className="login-card" onSubmit={submit}>
         <div className="brand">
-          <div className="logo-mark">K</div>
+          <div className="logo-mark">P</div>
           <div>
-            <h1>Konek <span style={{ color: 'var(--tl)' }}>.admin</span></h1>
+            <h1>ProList <span style={{ color: 'var(--tl)' }}>.admin</span></h1>
           </div>
         </div>
         <p className="sub">Sign in with your administrator account.</p>

@@ -1,6 +1,6 @@
 {
-  "name": "Konek.PH — Broker Dashboard",
-  "short_name": "Konek",
+  "name": "ProList — Broker Dashboard",
+  "short_name": "ProList",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

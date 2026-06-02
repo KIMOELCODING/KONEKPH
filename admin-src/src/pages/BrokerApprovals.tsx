@@ -63,7 +63,7 @@ export default function BrokerApprovals() {
       user_id: p.id,
       type: 'broker_approved',
       title: 'Account approved',
-      body: 'Your Konek.PH broker account has been approved.',
+      body: 'Your ProList broker account has been approved.',
     });
     const mailErr = await notify(p.id, 'approved');
     setBusy(null);

@@ -25,8 +25,8 @@ export default function Shell({ profile, onSignOut, children }: Props) {
     <div className="app">
       <aside className="sidebar">
         <div className="sb-brand">
-          <div className="logo-mark">K</div>
-          <div className="brand-text">Konek<span>.admin</span></div>
+          <div className="logo-mark">P</div>
+          <div className="brand-text">ProList<span>.admin</span></div>
         </div>
         <ul className="sb-nav">
           {NAV.map(n => (

@@ -1,10 +1,10 @@
-// Konek.PH broker app service worker
+// ProList broker app service worker
 // Strategy:
 //   - Cache-first for app shell + CDN assets
 //   - Bypass cache for Supabase API (auth/data must stay fresh)
 //   - Bypass cache for /admin/* (admin app is its own world)
 
-const VERSION = 'konek-v1';
+const VERSION = 'prolist-v1';
 const SHELL = [
   '/',
   '/index.html',

@@ -11,7 +11,7 @@ const url = window.SUPABASE_URL;
 const key = window.SUPABASE_ANON_KEY;
 
 if (!url || !key || url.includes('YOUR-PROJECT')) {
-  console.error('Konek admin: config.js is missing or has placeholder values.');
+  console.error('ProList admin: config.js is missing or has placeholder values.');
 }
 
 export const sb: SupabaseClient = createClient(url || 'https://invalid.supabase.co', key || 'invalid', {

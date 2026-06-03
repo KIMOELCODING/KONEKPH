@@ -7692,5 +7692,39 @@ document.addEventListener('DOMContentLoaded', async function() {
     window.addEventListener('konek-bundler-done', start);
   })();
   </script>
+
+  <!-- Remove the duplicate "Personal Info" tab from Settings. The Profile tab is the
+       single home for personal details, so this strips the redundant Settings section
+       and promotes "Login & Security" to the default-shown tab. Runs against live DOM
+       (the Settings markup is injected from the line-206 blob) rather than editing the
+       escaped blob directly. -->
+  <script id="k-settings-trim">
+  (function(){
+    function trim(){
+      var panel = document.getElementById('sp-personal');
+      var nav   = document.querySelector('.settings-nav-item[onclick*="switchSettings(\'personal\'"]');
+      if (!panel && !nav) return false; // Settings DOM not injected yet — retry.
+      if (nav   && nav.parentNode)   nav.parentNode.removeChild(nav);
+      if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
+      // Promote Login & Security to default (the removed Personal tab was the default),
+      // but don't stomp an already-active tab if one exists.
+      var secNav   = document.querySelector('.settings-nav-item[onclick*="switchSettings(\'security\'"]');
+      var secPanel = document.getElementById('sp-security');
+      if (secNav   && !document.querySelector('.settings-nav-item.active')) secNav.classList.add('active');
+      if (secPanel && !document.querySelector('.settings-panel.active'))    secPanel.classList.add('active');
+      return true;
+    }
+    function start(){
+      if (trim()) return;
+      var n = 0, iv = setInterval(function(){
+        n++;
+        if (trim() || n > 20) clearInterval(iv);
+      }, 250);
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+    else start();
+    window.addEventListener('konek-bundler-done', start);
+  })();
+  </script>
 </body>
 </html>

@@ -842,13 +842,35 @@ document.addEventListener('DOMContentLoaded', async function() {
        ========================================================================== -->
   <script id="k-data">
   (function(){
+    // ProList image thumbnails via Supabase Pro image transforms (Pro-only
+    // feature). Flag-gated: set localStorage 'prolist.imgtx' = '0' to disable
+    // instantly without a redeploy if transforms are ever unavailable. Pass a
+    // width to get a downscaled CDN render URL; pass width+height for a uniform
+    // cropped thumbnail; omit width for the full-size original.
+    if (!window.__plImg){
+      window.__PL_IMG_TX = (function(){
+        try { var v = localStorage.getItem('prolist.imgtx'); if (v === '0') return false; if (v === '1') return true; } catch(e){}
+        return true; // Supabase Pro active → transforms on by default
+      })();
+      window.__plImg = function(bucket, path, w, h){
+        if (!path || !window.sb) return '';
+        try {
+          var st = window.sb.storage.from(bucket);
+          if (window.__PL_IMG_TX && w){
+            var tx = { width: w, quality: 70 };
+            if (h){ tx.height = h; tx.resize = 'cover'; }   // both dims → uniform crop
+            return st.getPublicUrl(path, { transform: tx }).data.publicUrl || '';
+          }
+          return st.getPublicUrl(path).data.publicUrl || ''; // full-size / transforms off
+        } catch(e){ return ''; }
+      };
+    }
     if (!window.sb) { console.warn('[konek-data] sb client missing — skipping data wiring.'); return; }
 
     function mapListing(row){
       var img = '';
       if (row.images && row.images[0]) {
-        try { img = window.sb.storage.from('listing-images').getPublicUrl(row.images[0]).data.publicUrl || ''; }
-        catch(e){ img = ''; }
+        img = window.__plImg('listing-images', row.images[0], 480, 320); // grid card thumbnail
       }
       var specs = [];
       if (row.bedrooms)       specs.push(row.bedrooms + ' bed');
@@ -1649,8 +1671,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     function resolveAvatarUrl(raw){
       if (!raw) return '';
       if (raw.indexOf('data:') === 0 || raw.indexOf('http') === 0) return raw;
-      try { return (window.sb && window.sb.storage.from('avatars').getPublicUrl(raw).data.publicUrl) || ''; }
-      catch(e){ return ''; }
+      return window.__plImg('avatars', raw, 160, 160);
     }
     function paintAvatars(u){
       var url = resolveAvatarUrl(u && u.avatar_url);
@@ -2484,8 +2505,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     function resolveAvatarUrl(raw){
       if (!raw) return '';
       if (raw.indexOf('data:') === 0 || raw.indexOf('http') === 0) return raw;
-      try { return window.sb.storage.from('avatars').getPublicUrl(raw).data.publicUrl || ''; }
-      catch(e){ return ''; }
+      return window.__plImg('avatars', raw, 160, 160);
     }
 
     function updateTopbarChips(p, overrideAvatarDataUrl){
@@ -4066,12 +4086,11 @@ document.addEventListener('DOMContentLoaded', async function() {
       var mainImg = document.getElementById('ldsh-main-img');
       var thumbWrap = page.querySelector('.ld-sh-thumbs');
       var imgPaths = Array.isArray(row.images) ? row.images : [];
-      var imgUrls = [];
+      var imgUrls = [];   // full-size (aspect-preserved, width-capped) for the hero
+      var thumbUrls = []; // small cropped squares for the strip
       for (var ii = 0; ii < imgPaths.length; ii++){
-        try {
-          var u = window.sb.storage.from('listing-images').getPublicUrl(imgPaths[ii]).data.publicUrl;
-          if (u) imgUrls.push(u);
-        } catch(e){}
+        var full = window.__plImg('listing-images', imgPaths[ii], 1280); // hero: width cap, no crop
+        if (full){ imgUrls.push(full); thumbUrls.push(window.__plImg('listing-images', imgPaths[ii], 160, 120) || full); }
       }
       if (imgUrls.length){
         if (mainImg) mainImg.src = imgUrls[0];
@@ -4080,7 +4099,7 @@ document.addEventListener('DOMContentLoaded', async function() {
           imgUrls.forEach(function(u, idx){
             var t = document.createElement('img');
             t.className = 'ld-sh-thumb' + (idx === 0 ? ' active' : '');
-            t.src = u;
+            t.src = thumbUrls[idx] || u;
             t.alt = '';
             t.loading = 'lazy';
             t.addEventListener('click', function(){
@@ -4308,7 +4327,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         var real = '';
         if (b.avatar_url){
           if (b.avatar_url.indexOf('data:') === 0 || b.avatar_url.indexOf('http') === 0) real = b.avatar_url;
-          else { try { real = window.sb.storage.from('avatars').getPublicUrl(b.avatar_url).data.publicUrl || ''; } catch(e){} }
+          else { real = window.__plImg('avatars', b.avatar_url, 160, 160); }
         }
         avEl.onerror = function(){ this.onerror = null; this.src = initialsSvg; };
         avEl.src = real || initialsSvg;
@@ -6081,7 +6100,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     function resolveAv(raw, name){
       if (raw){
         if (raw.indexOf('data:') === 0 || raw.indexOf('http') === 0) return raw;
-        try { var u = window.sb.storage.from('avatars').getPublicUrl(raw).data.publicUrl; if (u) return u; } catch(e){}
+        var u = window.__plImg('avatars', raw, 96, 96); if (u) return u;
       }
       return avatarSrc(name);
     }
@@ -6113,7 +6132,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       (res.data || []).forEach(function(r){
         var img = '';
         if (r.images && r.images[0]) {
-          try { img = window.sb.storage.from('listing-images').getPublicUrl(r.images[0]).data.publicUrl || ''; } catch(e){}
+          img = window.__plImg('listing-images', r.images[0], 120, 120); // chat listing-card thumbnail
         }
         listingTitleCache[r.id] = {
           title: r.title || '',
@@ -6900,7 +6919,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         var real = '';
         if (d.avatar_url){
           if (d.avatar_url.indexOf('data:') === 0 || d.avatar_url.indexOf('http') === 0) real = d.avatar_url;
-          else { try { real = window.sb.storage.from('avatars').getPublicUrl(d.avatar_url).data.publicUrl || ''; } catch(e){} }
+          else { real = window.__plImg('avatars', d.avatar_url, 240, 240); }
         }
         if (real){ av.src = real; }
         else {

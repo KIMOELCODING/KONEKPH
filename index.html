@@ -5153,6 +5153,21 @@ document.addEventListener('DOMContentLoaded', async function() {
         });
         r.__ddBound = true;
       });
+
+      // Today's Focus "+" button — the bundled markup ships it unwired. Open the
+      // create-event modal prefilled with today so the new task lands in
+      // calendar_events, which then shows on the calendar AND back here (the
+      // widget re-renders from CAL_EVENTS after __konekLoadData).
+      document.querySelectorAll('.tf-add').forEach(function(b){
+        if (b.__addBound) return;
+        b.addEventListener('click', function(e){
+          e.preventDefault();
+          e.stopPropagation();
+          var t = new Date();
+          openCreateOn(isoDate(t.getFullYear(), t.getMonth(), t.getDate()));
+        });
+        b.__addBound = true;
+      });
     }
 
     function rebindAll(){

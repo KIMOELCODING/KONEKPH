@@ -1,0 +1,5 @@
+{
+  "_comment": "Copy this file to storage-backup.local.json (gitignored) and fill in real values. The service_role key is in Supabase Dashboard -> Project Settings -> API -> 'service_role' secret. It bypasses RLS — never commit or share it.",
+  "url": "https://ffewjmucspcswdcxouvc.supabase.co",
+  "serviceRoleKey": "PASTE_YOUR_SERVICE_ROLE_KEY_HERE"
+}

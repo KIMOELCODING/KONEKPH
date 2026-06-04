@@ -654,6 +654,10 @@ document.addEventListener('DOMContentLoaded', async function() {
           return;
         }
         if (event === 'SIGNED_IN' && session && session.user) {
+          // Password-recovery in progress: verifyOtp({type:'recovery'}) establishes a
+          // session here, but the user must set a new password before entering the app.
+          // The k-forgot flow sets this flag; it clears it right before its final signOut.
+          if (window.__konekRecovering) return;
           loadProfileInto(session.user.id)
             .then(function(){
               var u = window.__currentUser;
@@ -7735,6 +7739,277 @@ document.addEventListener('DOMContentLoaded', async function() {
         n++;
         if (trim() || n > 20) clearInterval(iv);
       }, 250);
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+    else start();
+    window.addEventListener('konek-bundler-done', start);
+  })();
+  </script>
+  <script id="k-forgot">
+  // ---- Forgot-password (6/8-digit code) flow --------------------------------
+  // Wires the previously-dead "Forgot password?" link on the login screen to a
+  // 3-step overlay: enter email -> resetPasswordForEmail (Resend SMTP delivers an
+  // OTP code) -> verifyOtp({type:'recovery'}) -> updateUser({password}) -> signOut.
+  // The project's email OTP length is 8 digits (matches the signup OTP overlay).
+  // Idempotent + re-runs on bundler-done because the bundler replaces
+  // documentElement and re-executes appended scripts.
+  (function(){
+    var CODE_LEN = 8;
+    var fpEmail = '';
+    var resendCooldown = 0;
+
+    function sb(){ return window.sb; }
+    function openOverlay(id){
+      if (typeof window.showModal === 'function') { window.showModal(id); return; }
+      var el = document.getElementById(id); if (el) el.classList.add('show');
+    }
+    function closeOverlay(id){
+      if (typeof window.closeModal === 'function') { window.closeModal(id); return; }
+      var el = document.getElementById(id); if (el) el.classList.remove('show');
+    }
+    function setErr(el, msg){ if (el) el.textContent = msg || ''; }
+
+    // Mirror Supabase's password policy (same rules as k-auth's pwPolicyError,
+    // which is closure-local there and not reachable from here).
+    function pwPolicyError(pw){
+      if (pw.length < 8) return 'Password must be at least 8 characters long.';
+      if (!/[a-z]/.test(pw)) return 'Password needs at least one lowercase letter (a–z).';
+      if (!/[A-Z]/.test(pw)) return 'Password needs at least one uppercase letter (A–Z).';
+      if (!/[0-9]/.test(pw)) return 'Password needs at least one number (0–9).';
+      if (!/[!@#$%^&*()_+\-=\[\]{};\':"|<>?,.\/`~]/.test(pw)) return 'Password needs at least one symbol (e.g. ! @ # $ % &).';
+      return null;
+    }
+
+    function step(which){
+      var ov = document.getElementById('overlay-forgot'); if (!ov) return;
+      ['email','code','pw'].forEach(function(s){
+        var d = ov.querySelector('[data-fp-step="' + s + '"]');
+        if (d) d.style.display = (s === which) ? '' : 'none';
+      });
+    }
+
+    function ensureOverlay(){
+      if (document.getElementById('overlay-forgot') || !document.body) return;
+      var ov = document.createElement('div');
+      ov.className = 'overlay';
+      ov.id = 'overlay-forgot';
+      var inputCss = 'width:100%;padding:13px 14px;font-size:14px;border:2px solid var(--br,#d4dcd4);border-radius:10px;font-family:inherit;outline:none;box-sizing:border-box;margin-bottom:10px;';
+      var btnCss = 'width:100%;padding:13px;background:var(--gd,#2a7a3d);color:#fff;border:0;border-radius:10px;cursor:pointer;font-weight:600;font-family:inherit;font-size:14px;margin-bottom:10px;';
+      var linkCss = 'background:none;border:0;color:var(--gd,#2a7a3d);cursor:pointer;font-weight:600;font-family:inherit;font-size:13px;padding:6px;';
+      var mutedCss = 'background:none;border:0;color:var(--tm,#4a5a4a);cursor:pointer;font-family:inherit;font-size:13px;padding:6px;';
+      var errCss = 'color:#c44;font-size:13px;min-height:18px;margin-bottom:10px;text-align:left;';
+      ov.innerHTML =
+        '<div class="modal" style="max-width:440px;text-align:center;padding:36px 32px;">' +
+        // STEP: email
+        '  <div data-fp-step="email">' +
+        '    <div style="font-size:46px;color:var(--gd,#2a7a3d);margin-bottom:12px;"><i class="fa-solid fa-key"></i></div>' +
+        '    <h3 style="margin:0 0 8px;font-size:20px;">Reset your password</h3>' +
+        '    <p style="margin:0 0 20px;color:var(--tm,#4a5a4a);line-height:1.5;font-size:13px;">Enter your account email and we\'ll send you a verification code.</p>' +
+        '    <input id="k-fp-email" type="email" autocomplete="email" placeholder="you@email.com" style="' + inputCss + '" />' +
+        '    <div id="k-fp-email-error" style="' + errCss + '"></div>' +
+        '    <button id="k-fp-send" style="' + btnCss + '">Send code</button>' +
+        '    <button id="k-fp-cancel1" style="' + mutedCss + '">Back to sign in</button>' +
+        '  </div>' +
+        // STEP: code
+        '  <div data-fp-step="code" style="display:none;">' +
+        '    <div style="font-size:46px;color:var(--gd,#2a7a3d);margin-bottom:12px;"><i class="fa-solid fa-shield-halved"></i></div>' +
+        '    <h3 style="margin:0 0 8px;font-size:20px;">Enter verification code</h3>' +
+        '    <p style="margin:0 0 18px;color:var(--tm,#4a5a4a);line-height:1.5;font-size:13px;">If an account exists, we sent a code to <strong id="k-fp-email-disp" style="color:var(--td,#1a2a1a);"></strong>.</p>' +
+        '    <input id="k-fp-code" type="text" inputmode="numeric" pattern="[0-9]{' + CODE_LEN + '}" maxlength="' + CODE_LEN + '" autocomplete="one-time-code" placeholder="' + Array(CODE_LEN+1).join('0') + '" style="width:100%;padding:14px 16px;font-size:22px;text-align:center;letter-spacing:8px;border:2px solid var(--br,#d4dcd4);border-radius:10px;font-family:inherit;outline:none;box-sizing:border-box;margin-bottom:10px;" />' +
+        '    <div id="k-fp-code-error" style="' + errCss + '"></div>' +
+        '    <button id="k-fp-verify" style="' + btnCss + '">Verify</button>' +
+        '    <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;">' +
+        '      <button id="k-fp-resend" style="' + linkCss + '">Resend code</button>' +
+        '      <button id="k-fp-cancel2" style="' + mutedCss + '">Cancel</button>' +
+        '    </div>' +
+        '  </div>' +
+        // STEP: pw
+        '  <div data-fp-step="pw" style="display:none;">' +
+        '    <div style="font-size:46px;color:var(--gd,#2a7a3d);margin-bottom:12px;"><i class="fa-solid fa-lock"></i></div>' +
+        '    <h3 style="margin:0 0 8px;font-size:20px;">Set a new password</h3>' +
+        '    <p style="margin:0 0 18px;color:var(--tm,#4a5a4a);line-height:1.5;font-size:13px;">Choose a strong password you haven\'t used before.</p>' +
+        '    <input id="k-fp-pw" type="password" autocomplete="new-password" placeholder="New password" style="' + inputCss + '" />' +
+        '    <input id="k-fp-pw2" type="password" autocomplete="new-password" placeholder="Confirm new password" style="' + inputCss + '" />' +
+        '    <div style="font-size:11.5px;color:var(--tm,#4a5a4a);text-align:left;margin:-2px 0 12px;line-height:1.5;">Must include 8+ characters, an uppercase &amp; lowercase letter, a number, and a symbol.</div>' +
+        '    <div id="k-fp-pw-error" style="' + errCss + '"></div>' +
+        '    <button id="k-fp-update" style="' + btnCss + '">Update password</button>' +
+        '  </div>' +
+        '</div>';
+      document.body.appendChild(ov);
+      wireOverlay(ov);
+    }
+
+    function wireOverlay(ov){
+      var emailInp = ov.querySelector('#k-fp-email');
+      var emailErr = ov.querySelector('#k-fp-email-error');
+      var codeInp  = ov.querySelector('#k-fp-code');
+      var codeErr  = ov.querySelector('#k-fp-code-error');
+      var pwInp    = ov.querySelector('#k-fp-pw');
+      var pw2Inp   = ov.querySelector('#k-fp-pw2');
+      var pwErr    = ov.querySelector('#k-fp-pw-error');
+      var btnSend  = ov.querySelector('#k-fp-send');
+      var btnVerify= ov.querySelector('#k-fp-verify');
+      var btnUpdate= ov.querySelector('#k-fp-update');
+      var btnResend= ov.querySelector('#k-fp-resend');
+
+      function close(){ window.__konekRecovering = false; closeOverlay('overlay-forgot'); }
+
+      // -- Step 1: send code
+      btnSend.addEventListener('click', async function(){
+        setErr(emailErr, '');
+        var email = (emailInp.value || '').trim();
+        if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { setErr(emailErr, 'Please enter a valid email address.'); return; }
+        if (!sb()) { setErr(emailErr, 'Service unavailable. Please reload and try again.'); return; }
+        btnSend.disabled = true; btnSend.textContent = 'Sending…';
+        var sendErr = null;
+        try {
+          var rp = await sb().auth.resetPasswordForEmail(email);
+          if (rp && rp.error) sendErr = rp.error;
+        } catch(e) { sendErr = e; }
+        btnSend.disabled = false; btnSend.textContent = 'Send code';
+        if (sendErr) {
+          // resetPasswordForEmail returns SUCCESS for both existing and
+          // non-existing *valid* emails (anti-enumeration), so an error here never
+          // reveals whether an account exists — it's a format / rate-limit / server
+          // problem the user should actually see, not be silently advanced past.
+          console.error('[konek-forgot] resetPasswordForEmail error:', sendErr);
+          var m = sendErr.message || '';
+          if (/invalid format|validate email/i.test(m)) m = 'That email address looks invalid — check for typos, extra spaces, or hidden characters (re-type it instead of pasting).';
+          else if (/rate limit|too many|429/i.test(m)) m = 'Too many requests — please wait about a minute, then try once more.';
+          else m = m || 'Could not send the code. Please try again.';
+          setErr(emailErr, m);
+          return;
+        }
+        // Anti-enumeration: success path is identical whether or not the account
+        // exists, so advancing here leaks nothing.
+        console.log('[konek-forgot] reset email requested OK (if the account exists, Supabase queued it)');
+        fpEmail = email;
+        var disp = ov.querySelector('#k-fp-email-disp'); if (disp) disp.textContent = email;
+        step('code');
+        setTimeout(function(){ try { codeInp.focus(); } catch(e){} }, 50);
+      });
+      emailInp.addEventListener('keydown', function(e){ if (e.key === 'Enter') btnSend.click(); });
+
+      // -- Step 2: verify code
+      codeInp.addEventListener('input', function(){ codeInp.value = codeInp.value.replace(/[^0-9]/g,'').slice(0,CODE_LEN); setErr(codeErr,''); });
+      codeInp.addEventListener('keydown', function(e){ if (e.key === 'Enter') btnVerify.click(); });
+      btnVerify.addEventListener('click', async function(){
+        setErr(codeErr, '');
+        var token = (codeInp.value || '').trim();
+        if (token.length !== CODE_LEN) { setErr(codeErr, 'Enter all ' + CODE_LEN + ' digits.'); return; }
+        if (!sb()) { setErr(codeErr, 'Service unavailable. Please reload and try again.'); return; }
+        btnVerify.disabled = true; btnVerify.textContent = 'Verifying…';
+        // Guard the auth-state listener: verifyOtp creates a session, but the user
+        // must set a new password before the app routes them anywhere.
+        window.__konekRecovering = true;
+        try {
+          var v = await sb().auth.verifyOtp({ email: fpEmail, token: token, type: 'recovery' });
+          if (v.error || !v.data || !v.data.session) {
+            window.__konekRecovering = false;
+            setErr(codeErr, (v.error && v.error.message) || 'Invalid or expired code.');
+            btnVerify.disabled = false; btnVerify.textContent = 'Verify';
+            return;
+          }
+          btnVerify.disabled = false; btnVerify.textContent = 'Verify';
+          step('pw');
+          setTimeout(function(){ try { pwInp.focus(); } catch(e){} }, 50);
+        } catch(e) {
+          window.__konekRecovering = false;
+          setErr(codeErr, e.message || 'Verification failed.');
+          btnVerify.disabled = false; btnVerify.textContent = 'Verify';
+        }
+      });
+
+      // -- Resend code (60s cooldown)
+      function tickResend(){
+        if (resendCooldown <= 0) { btnResend.disabled = false; btnResend.textContent = 'Resend code'; return; }
+        btnResend.disabled = true; btnResend.textContent = 'Resend in ' + resendCooldown + 's';
+        resendCooldown -= 1; setTimeout(tickResend, 1000);
+      }
+      btnResend.addEventListener('click', async function(){
+        if (resendCooldown > 0 || !fpEmail || !sb()) return;
+        setErr(codeErr, '');
+        try { await sb().auth.resetPasswordForEmail(fpEmail); } catch(e){}
+        resendCooldown = 60; tickResend();
+      });
+
+      // -- Step 3: update password
+      btnUpdate.addEventListener('click', async function(){
+        setErr(pwErr, '');
+        var pw = pwInp.value || '', pw2 = pw2Inp.value || '';
+        var perr = pwPolicyError(pw);
+        if (perr) { setErr(pwErr, perr); return; }
+        if (pw !== pw2) { setErr(pwErr, 'Those passwords don’t match — please re-enter them.'); return; }
+        if (!sb()) { setErr(pwErr, 'Service unavailable. Please reload and try again.'); return; }
+        btnUpdate.disabled = true; btnUpdate.textContent = 'Updating…';
+        try {
+          var r = await sb().auth.updateUser({ password: pw });
+          if (r.error) {
+            setErr(pwErr, r.error.message || 'Could not update password.');
+            btnUpdate.disabled = false; btnUpdate.textContent = 'Update password';
+            return;
+          }
+          // Done — drop the recovery session and return to the login screen.
+          window.__konekRecovering = false;
+          try { await sb().auth.signOut(); } catch(e){}
+          closeOverlay('overlay-forgot');
+          // Reset fields for next time.
+          emailInp.value = ''; codeInp.value = ''; pwInp.value = ''; pw2Inp.value = '';
+          step('email');
+          if (typeof window.__konekToast === 'function') window.__konekToast('Password updated — please sign in with your new password.');
+          var le = document.getElementById('app-login'); if (le) le.style.display = '';
+        } catch(e) {
+          setErr(pwErr, e.message || 'Could not update password.');
+          btnUpdate.disabled = false; btnUpdate.textContent = 'Update password';
+        }
+      });
+
+      // Cancel buttons (both steps) -> close + reset to email step.
+      var c1 = ov.querySelector('#k-fp-cancel1'); if (c1) c1.addEventListener('click', function(){ close(); step('email'); });
+      var c2 = ov.querySelector('#k-fp-cancel2'); if (c2) c2.addEventListener('click', function(){ close(); step('email'); });
+    }
+
+    function openForgot(){
+      ensureOverlay();
+      step('email');
+      // Prefill from the login email field if the user already typed it.
+      var src = document.getElementById('inp-email');
+      var dst = document.getElementById('k-fp-email');
+      if (dst) { dst.value = (src && src.value) ? src.value.trim() : ''; }
+      var e1 = document.getElementById('k-fp-email-error'); if (e1) e1.textContent = '';
+      openOverlay('overlay-forgot');
+      setTimeout(function(){ try { dst && dst.focus(); } catch(e){} }, 50);
+    }
+
+    // Bind the (id-less) "Forgot password?" link. The bundler recreates the login
+    // DOM, so re-bind on every relevant event; a data flag keeps it idempotent.
+    function bind(){
+      ensureOverlay();
+      var link = document.querySelector('.auth-forgot');
+      if (link && !link.__fpBound) {
+        link.__fpBound = true;
+        link.style.cursor = 'pointer';
+        link.addEventListener('click', function(e){ e.preventDefault(); openForgot(); });
+      }
+      // Strip the mock "Demo: …/admin123" notice (and the matching demo-cred
+      // fallback text inside #login-error) so the production login looks clean.
+      // Idempotent: once removed/cleared these no longer match.
+      try {
+        var hints = document.querySelectorAll('.auth-hint');
+        for (var i = 0; i < hints.length; i++) {
+          if (/admin123|Demo:/i.test(hints[i].textContent || '')) hints[i].remove();
+        }
+        var le = document.getElementById('login-error');
+        if (le && /admin123/i.test(le.textContent || '')) le.textContent = '';
+      } catch(e){}
+    }
+    function start(){
+      bind();
+      var n = 0, iv = setInterval(function(){
+        n++; bind();
+        var link = document.querySelector('.auth-forgot');
+        if ((link && link.__fpBound) || n > 30) clearInterval(iv);
+      }, 200);
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
     else start();

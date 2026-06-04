@@ -18,7 +18,7 @@ We're designing the production backend so brokers can sign up, get verified by a
 - Listing quota overflow: **hard block + upgrade modal** (Regular only — Premium upgrade pitch); Premium overflow shows "wait until next month" message.
 - Regular-tier chat/matching/call: **shown but locked**, click triggers upgrade modal.
 - News/Announcements/Memoranda: **admin-only authored**.
-- Email: **SMTP** (Gmail App Password) via Edge Function. *(Was Resend; switched back to SMTP 2026-05-29 after the Resend key was rotated out. Secrets: `SMTP_USER`, `SMTP_PASS`, optional `SMTP_FROM_NAME`/`SMTP_FROM_EMAIL`/`SMTP_HOST`/`SMTP_PORT`.)*
+- Email: **Resend over SMTP** for both paths (2026-06-04). (1) OTP/auth email → Supabase Auth custom SMTP pointed at `smtp.resend.com`, verified domain `prolistph.com`. (2) notify-broker Edge Function → same generic SMTP code, secrets pointed at Resend: `SMTP_HOST=smtp.resend.com`, `SMTP_PORT=465`, `SMTP_USER=resend`, `SMTP_PASS=<resend key>`, **`SMTP_FROM_EMAIL=noreply@prolistph.com` (required — FROM_EMAIL defaults to SMTP_USER `resend`, which is not a valid address)**, optional `SMTP_FROM_NAME`. *(History: was Resend HTTP API → Gmail SMTP 2026-05-29 after key rotation → back to Resend via SMTP 2026-06-04 once the domain was verified. "Resend vs SMTP" is not either/or — Resend is delivered over SMTP.)*
 
 **Draft 28 reality check (2026-05-13):**
 - The Premium page in Draft 28 still advertises **Basic (Free) / Premium ₱999/month / Enterprise (custom)** — copy carried over from earlier drafts. **This is stale UI** — it must be rewritten to Regular vs Premium quarterly + monthly quota + price TBD when wiring begins. (Anchor: search line 182 for `Enterprise` or `₱999/month`.)

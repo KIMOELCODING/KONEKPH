@@ -52,6 +52,18 @@ export interface Article {
   created_at: string;
 }
 
+export interface Report {
+  id: string;
+  listing_id: string;
+  reporter_id: string;
+  reason: string;
+  description: string | null;
+  status: 'pending' | 'resolved' | 'dismissed';
+  created_at: string;
+  listings?: { id: string; title: string; broker_id: string; status: string; images: string[] | null; price: number; city: string | null; province: string | null } | null;
+  profiles?: { first_name: string; last_name: string; email: string | null } | null;
+}
+
 export interface PromotedSlide {
   id: string;
   title: string;

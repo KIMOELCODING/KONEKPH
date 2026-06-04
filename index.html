@@ -4218,6 +4218,22 @@ document.addEventListener('DOMContentLoaded', async function() {
           viewBtn.onclick = function(){ if (window.goTo) window.goTo('broker'); };
         }
       }
+      // "Report this listing" — opens the report overlay (k-report). Created once
+      // per detail page; hidden on your own listing (you can't report yourself).
+      var repBtn = page.querySelector('#k-report-btn');
+      if (!repBtn){
+        repBtn = document.createElement('button');
+        repBtn.id = 'k-report-btn';
+        repBtn.type = 'button';
+        repBtn.innerHTML = '<i class="fa-solid fa-flag"><\/i> Report this listing';
+        repBtn.style.cssText = 'align-items:center;justify-content:center;gap:7px;width:100%;margin-top:8px;padding:9px 11px;background:none;border:1px solid var(--br,#d4dcd4);border-radius:10px;color:var(--tm,#4a5a4a);font:600 12.5px/1 Inter,-apple-system,BlinkMacSystemFont,sans-serif;cursor:pointer;';
+        if (cta && cta.parentNode) cta.parentNode.appendChild(repBtn);
+        else if (brokerForm && brokerForm.parentNode) brokerForm.parentNode.appendChild(repBtn);
+      }
+      if (repBtn){
+        repBtn.style.display = ownListing ? 'none' : 'flex';
+        repBtn.onclick = function(){ if (window.__konekOpenReport) window.__konekOpenReport(row.id); };
+      }
       // Remember this listing's broker for the broker-profile page (reached via
       // "From the Same Broker → View All") + paint the agent card with the real
       // broker. Cache by broker_id so repeated refreshes (reRenderCurrentPage)
@@ -8011,6 +8027,112 @@ document.addEventListener('DOMContentLoaded', async function() {
         if ((link && link.__fpBound) || n > 30) clearInterval(iv);
       }, 200);
     }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+    else start();
+    window.addEventListener('konek-bundler-done', start);
+  })();
+  </script>
+  <script id="k-report">
+  // ---- Report a listing -----------------------------------------------------
+  // Wires window.__konekOpenReport(listingId) (called from the listing-detail
+  // Report button in k-listings) to a small overlay that inserts a row into
+  // listing_reports and fires a best-effort admin alert via notify-broker.
+  // Idempotent + re-runs on bundler-done (the bundler rebuilds the DOM).
+  (function(){
+    var REASONS = [
+      'Scam or fraud',
+      'Misleading info or price',
+      'Already sold / unavailable',
+      'Inappropriate or offensive',
+      'Duplicate listing',
+      'Other'
+    ];
+    var currentListingId = null;
+
+    function sbc(){ return window.sb; }
+    function openOverlay(id){ if (typeof window.showModal === 'function'){ window.showModal(id); return; } var el = document.getElementById(id); if (el) el.classList.add('show'); }
+    function closeOverlay(id){ if (typeof window.closeModal === 'function'){ window.closeModal(id); return; } var el = document.getElementById(id); if (el) el.classList.remove('show'); }
+
+    function ensureOverlay(){
+      if (document.getElementById('overlay-report') || !document.body) return;
+      var ov = document.createElement('div');
+      ov.className = 'overlay'; ov.id = 'overlay-report';
+      var opts = REASONS.map(function(r){ return '<option value="' + r + '">' + r + '</option>'; }).join('');
+      ov.innerHTML =
+        '<div class="modal" style="max-width:440px;padding:32px;">' +
+        '  <div style="text-align:center;margin-bottom:18px;">' +
+        '    <div style="font-size:42px;color:var(--gd,#2a7a3d);margin-bottom:10px;"><i class="fa-solid fa-flag"></i></div>' +
+        '    <h3 style="margin:0 0 6px;font-size:20px;">Report this listing</h3>' +
+        '    <p style="margin:0;color:var(--tm,#4a5a4a);line-height:1.5;font-size:13px;">Tell us what\'s wrong. Our team reviews every report.</p>' +
+        '  </div>' +
+        '  <label style="display:block;font-size:12px;color:var(--tm,#4a5a4a);margin-bottom:5px;">Reason</label>' +
+        '  <select id="k-rep-reason" style="width:100%;padding:11px 12px;font-size:14px;border:2px solid var(--br,#d4dcd4);border-radius:10px;font-family:inherit;outline:none;box-sizing:border-box;margin-bottom:12px;background:#fff;">' + opts + '</select>' +
+        '  <label style="display:block;font-size:12px;color:var(--tm,#4a5a4a);margin-bottom:5px;">Details (optional)</label>' +
+        '  <textarea id="k-rep-note" rows="3" placeholder="Add anything that helps us review this…" style="width:100%;padding:11px 12px;font-size:14px;border:2px solid var(--br,#d4dcd4);border-radius:10px;font-family:inherit;outline:none;box-sizing:border-box;resize:vertical;margin-bottom:8px;"></textarea>' +
+        '  <div id="k-rep-error" style="color:#c44;font-size:13px;min-height:18px;margin-bottom:8px;"></div>' +
+        '  <button id="k-rep-submit" style="width:100%;padding:13px;background:var(--gd,#2a7a3d);color:#fff;border:0;border-radius:10px;cursor:pointer;font-weight:600;font-family:inherit;font-size:14px;margin-bottom:8px;">Submit report</button>' +
+        '  <button id="k-rep-cancel" style="width:100%;padding:11px;background:none;color:var(--tm,#4a5a4a);border:1px solid var(--br,#d4dcd4);border-radius:10px;cursor:pointer;font-family:inherit;font-size:13px;">Cancel</button>' +
+        '</div>';
+      document.body.appendChild(ov);
+
+      var reasonEl = ov.querySelector('#k-rep-reason');
+      var noteEl   = ov.querySelector('#k-rep-note');
+      var errEl    = ov.querySelector('#k-rep-error');
+      var btnS     = ov.querySelector('#k-rep-submit');
+      var btnC     = ov.querySelector('#k-rep-cancel');
+
+      btnC.addEventListener('click', function(){ closeOverlay('overlay-report'); });
+
+      btnS.addEventListener('click', async function(){
+        errEl.textContent = '';
+        var u = window.__currentUser;
+        if (!currentListingId) { errEl.textContent = 'Something went wrong — please reopen this listing.'; return; }
+        if (!u || !u.id || !sbc()) { errEl.textContent = 'Please sign in again to report.'; return; }
+        var reason = (reasonEl.value || '').trim() || 'Other';
+        var note = (noteEl.value || '').trim();
+        btnS.disabled = true; btnS.textContent = 'Submitting…';
+        try {
+          var ins = await sbc().from('listing_reports').insert({
+            listing_id: currentListingId,
+            reporter_id: u.id,
+            reason: reason,
+            description: note || null
+          });
+          btnS.disabled = false; btnS.textContent = 'Submit report';
+          if (ins.error) {
+            // Unique (listing_id, reporter_id) violation -> already reported.
+            if (ins.error.code === '23505') {
+              closeOverlay('overlay-report');
+              if (window.__konekToast) window.__konekToast('You\'ve already reported this listing.');
+              return;
+            }
+            errEl.textContent = ins.error.message || 'Could not submit report.';
+            return;
+          }
+          // Best-effort admin alert (in-app + email) — mirrors the new_listing call.
+          try {
+            await sbc().functions.invoke('notify-broker', { body: { broker_id: u.id, action: 'listing_reported', listing_id: currentListingId, reason: reason } });
+          } catch(e){ console.warn('[konek-report] notify-broker failed', e); }
+          closeOverlay('overlay-report');
+          if (window.__konekToast) window.__konekToast('Report submitted. Thank you — our team will review it.');
+        } catch(e){
+          btnS.disabled = false; btnS.textContent = 'Submit report';
+          errEl.textContent = e.message || 'Could not submit report.';
+        }
+      });
+    }
+
+    window.__konekOpenReport = function(listingId){
+      ensureOverlay();
+      currentListingId = listingId || null;
+      var ov = document.getElementById('overlay-report'); if (!ov) return;
+      var r = ov.querySelector('#k-rep-reason'); if (r) r.selectedIndex = 0;
+      var n = ov.querySelector('#k-rep-note'); if (n) n.value = '';
+      var e = ov.querySelector('#k-rep-error'); if (e) e.textContent = '';
+      openOverlay('overlay-report');
+    };
+
+    function start(){ ensureOverlay(); }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
     else start();
     window.addEventListener('konek-bundler-done', start);

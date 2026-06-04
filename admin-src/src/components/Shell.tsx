@@ -11,6 +11,7 @@ interface Props {
 const NAV = [
   { to: '/brokers', icon: 'fa-user-check', label: 'Broker Approvals' },
   { to: '/listings', icon: 'fa-clipboard-check', label: 'Listing Approvals' },
+  { to: '/reports', icon: 'fa-flag', label: 'Reports' },
   { to: '/articles', icon: 'fa-newspaper', label: 'Articles' },
   { to: '/promotions', icon: 'fa-bullhorn', label: 'Promotions' },
   { to: '/users', icon: 'fa-users', label: 'Users' },

@@ -4,3 +4,33 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Strict-Transport-Security: max-age=31536000; includeSubDomains
   Permissions-Policy: geolocation=(), microphone=(), camera=()
+
+# Icons never change without a filename change → cache hard for a year so they
+# are fetched once and never re-downloaded.
+/icons/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Vite emits content-hashed admin bundles (assets/*.[hash].js|css) → immutable.
+/admin/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# App shell, service worker, manifest and runtime config must always revalidate
+# so a fresh deploy is picked up immediately. With a validator (ETag) this means
+# a returning visitor sends a conditional request and gets a tiny 304 when
+# nothing changed — NOT a 5 MB re-download of index.html.
+/
+  Cache-Control: no-cache
+/index.html
+  Cache-Control: no-cache
+/service-worker.js
+  Cache-Control: no-cache
+/manifest.webmanifest
+  Cache-Control: no-cache
+/config.js
+  Cache-Control: no-cache
+/admin/
+  Cache-Control: no-cache
+/admin/index.html
+  Cache-Control: no-cache
+/admin/config.js
+  Cache-Control: no-cache

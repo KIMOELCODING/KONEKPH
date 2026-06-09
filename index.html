@@ -8157,6 +8157,11 @@ document.addEventListener('DOMContentLoaded', async function() {
       '#k-m-topbar, #k-m-tabbar { display: none; }',
       '#k-m-backdrop { display: none; }',
       '.k-m-back { display: none; }',
+      // Keep text at its authored size (iOS/Safari otherwise auto-inflates text,
+      // which reads as the layout "zooming") and use manipulation touch-action so
+      // double-tap does not zoom. Pairs with the locked viewport meta above.
+      'html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }',
+      'html, body { touch-action: manipulation; }',
       '@media (max-width: 820px) {',
       '  #app-shell.visible { height: 100vh; height: 100dvh; }',
       '  .main { width: 100%; min-width: 0; }',
@@ -8546,14 +8551,22 @@ document.addEventListener('DOMContentLoaded', async function() {
       }
     }
 
-    // iPhones with a notch / home indicator need viewport-fit=cover for the
-    // page to fill the screen edge-to-edge and for env(safe-area-inset-*) to
-    // resolve to real values (the tab bar pads itself above the home bar).
+    // Lock the viewport to a fixed, native-app layout. The packed app ships
+    // `width=device-width, initial-scale=1.0`, which lets the page pinch-zoom and
+    // (on iOS) auto-zoom whenever a form field is focused — so the UI drifts in
+    // and out of zoom instead of staying put. maximum-scale=1 + user-scalable=no
+    // pin the scale; viewport-fit=cover lets it fill past the notch and makes
+    // env(safe-area-inset-*) resolve. Re-applied on every start() (initial load
+    // AND konek-bundler-done), since the bundler rebuilds the head each time.
     function ensureViewportFit() {
+      var want = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';
       var vp = q('meta[name="viewport"]');
-      if (vp && !/viewport-fit/.test(vp.getAttribute('content') || '')) {
-        vp.setAttribute('content', vp.getAttribute('content') + ', viewport-fit=cover');
+      if (!vp) {
+        vp = document.createElement('meta');
+        vp.setAttribute('name', 'viewport');
+        (document.head || document.documentElement).appendChild(vp);
       }
+      if (vp.getAttribute('content') !== want) vp.setAttribute('content', want);
     }
 
     function start() {
@@ -8568,6 +8581,38 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
     else start();
     window.addEventListener('konek-bundler-done', start);
+  })();
+  </script>
+
+  <!-- ==========================================================================
+       k-login-fix — route the Sign In button to the REAL Supabase login.
+       The packed app binds #btn-signin's click to the MOCK doLogin (the demo
+       admin@konek.ph / admin123 check) BEFORE k-auth replaces window.doLogin
+       with the real Supabase signInWithPassword. addEventListener captured the
+       mock function VALUE, so the button never triggers real auth: only the exact
+       demo creds "work", and mobile keyboards auto-capitalise the email so even
+       that fails (case-sensitive match) — the user sees an empty red banner and
+       real broker accounts can't sign in at all.
+
+       Fix: intercept the click in the CAPTURE phase (before the mock's bubble
+       listener), stop it, and call the current window.doLogin() — i.e. the real,
+       §7.3-wrapped Supabase login. Bound on document so it survives the bundler's
+       documentElement.replaceWith(); guarded so it binds exactly once.
+       ========================================================================== -->
+  <script id="k-login-fix">
+  (function(){
+    if (window.__konekLoginFixBound) return;
+    window.__konekLoginFixBound = true;
+    document.addEventListener('click', function(e){
+      var btn = e.target && e.target.closest && e.target.closest('#btn-signin');
+      if (!btn) return;
+      // Only take over once the real (or wrapped) doLogin is installed; before
+      // that, let the original handler run so we never dead-end the button.
+      if (typeof window.doLogin !== 'function') return;
+      e.preventDefault();
+      e.stopImmediatePropagation();   // suppress the mock listener on the button
+      try { window.doLogin(); } catch (err) { console.error('[konek-login-fix]', err); }
+    }, true);
   })();
   </script>
 </body>

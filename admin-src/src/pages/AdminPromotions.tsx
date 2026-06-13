@@ -12,6 +12,7 @@ interface FormState {
   is_active: boolean;
   starts_at: string;
   ends_at: string;
+  reactivate?: boolean;
 }
 
 const EMPTY_FORM: FormState = {
@@ -25,6 +26,16 @@ const EMPTY_FORM: FormState = {
   starts_at: '',
   ends_at: '',
 };
+
+// A slide is "finished" (eligible to reactivate) when it is hidden from the
+// broker carousel — either switched off, or still on but past its end date.
+function isExpired(s: PromotedSlide): boolean {
+  return !!s.ends_at && new Date(s.ends_at).getTime() < Date.now();
+}
+function isLive(s: PromotedSlide): boolean {
+  if (!s.is_active || isExpired(s)) return false;
+  return !s.starts_at || new Date(s.starts_at).getTime() <= Date.now();
+}
 
 function fmtDate(s: string | null) {
   if (!s) return '—';
@@ -112,7 +123,7 @@ export default function AdminPromotions() {
     }
     setBusy(null);
     if (error) { showToast(error.message, true); return; }
-    showToast(form.id ? 'Slide updated.' : 'Slide created.');
+    showToast(form.reactivate ? 'Promotion reactivated.' : form.id ? 'Slide updated.' : 'Slide created.');
     setForm(null);
     load();
   }
@@ -167,6 +178,25 @@ export default function AdminPromotions() {
     });
   }
 
+  // Reuse a finished promotion for a new run instead of creating a new slide:
+  // keep all the content, switch it back on, and clear the schedule so the admin
+  // sets a fresh run window (empty = runs until deactivated). Saving updates the
+  // same row (form.id is set), so the carousel slot/history is preserved.
+  function startReactivate(s: PromotedSlide) {
+    setForm({
+      id: s.id,
+      title: s.title,
+      company_name: s.company_name ?? '',
+      image_url: s.image_url,
+      body: s.body ?? '',
+      sort_order: s.sort_order,
+      is_active: true,
+      starts_at: '',
+      ends_at: '',
+      reactivate: true,
+    });
+  }
+
   return (
     <div className="card">
       <div className="card-header">
@@ -212,9 +242,12 @@ export default function AdminPromotions() {
                 <div className="lst-title">{s.title}</div>
                 {s.company_name && <div className="lst-meta">{s.company_name}</div>}
                 <div className="lst-meta">
-                  <span style={{ color: s.is_active ? '#0a7a3f' : '#a16207', fontWeight: 600 }}>
-                    {s.is_active ? 'Active' : 'Inactive'}
-                  </span>
+                  {(() => {
+                    const expired = isExpired(s);
+                    const label = expired ? 'Expired' : s.is_active ? 'Active' : 'Inactive';
+                    const color = expired ? '#b91c1c' : s.is_active ? '#0a7a3f' : '#a16207';
+                    return <span style={{ color, fontWeight: 600 }}>{label}</span>;
+                  })()}
                   <span style={{ marginLeft: 8 }}>· order {s.sort_order}</span>
                 </div>
                 <div className="lst-meta">
@@ -224,9 +257,13 @@ export default function AdminPromotions() {
                   <button className="btn btn-ghost" disabled={busy === s.id || i === 0} onClick={() => move(s, -1)}>↑</button>
                   <button className="btn btn-ghost" disabled={busy === s.id || i === rows.length - 1} onClick={() => move(s, 1)}>↓</button>
                   <button className="btn btn-ghost" disabled={busy === s.id} onClick={() => startEdit(s)}>Edit</button>
-                  <button className="btn btn-ghost" disabled={busy === s.id} onClick={() => toggleActive(s)}>
-                    {s.is_active ? 'Deactivate' : 'Activate'}
-                  </button>
+                  {isLive(s) ? (
+                    <button className="btn btn-ghost" disabled={busy === s.id} onClick={() => toggleActive(s)}>Deactivate</button>
+                  ) : (
+                    <button className="btn btn-primary" disabled={busy === s.id} onClick={() => startReactivate(s)}>
+                      <i className="fa-solid fa-rotate-right"></i> Reactivate
+                    </button>
+                  )}
                   <button className="btn btn-danger" disabled={busy === s.id} onClick={() => remove(s)}>Delete</button>
                 </div>
               </div>
@@ -274,11 +311,26 @@ function SlideForm({ form, setForm, busy, uploading, uploadImage, save }: SlideF
   return (
     <div className="form-card">
       <div className="form-header">
-        <div className="form-title">{form.id ? 'Edit slide' : 'New slide'}</div>
+        <div className="form-title">{form.reactivate ? 'Reactivate promotion' : form.id ? 'Edit slide' : 'New slide'}</div>
         <button className="btn btn-ghost" onClick={() => setForm(null)}>
           <i className="fa-solid fa-xmark"></i>
         </button>
       </div>
+
+      {form.reactivate && (
+        <div
+          style={{
+            margin: '0 0 14px', padding: '10px 14px', borderRadius: 8,
+            background: 'rgba(10,122,63,.08)', border: '1px solid rgba(10,122,63,.25)',
+            color: '#0a5c30', fontSize: 13, lineHeight: 1.45,
+          }}
+        >
+          <i className="fa-solid fa-rotate-right" style={{ marginRight: 8 }}></i>
+          Reusing this promotion for another run. Set a new <strong>run period</strong> below —
+          leave the dates empty to run it until you deactivate it. The existing slide is updated,
+          so no duplicate is created.
+        </div>
+      )}
 
       <div className="form-grid">
         <div className="form-field">
@@ -406,7 +458,7 @@ function SlideForm({ form, setForm, busy, uploading, uploadImage, save }: SlideF
       <div className="form-footer">
         <button className="btn btn-ghost" onClick={() => setForm(null)}>Cancel</button>
         <button className="btn btn-primary" disabled={busy !== null} onClick={save}>
-          {form.id ? 'Save changes' : 'Create slide'}
+          {form.reactivate ? 'Reactivate promotion' : form.id ? 'Save changes' : 'Create slide'}
         </button>
       </div>
     </div>

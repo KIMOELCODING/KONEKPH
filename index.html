@@ -15,8 +15,32 @@
     // serviceWorker support, and the SW self-unregisters on localhost/127.0.0.1.
     // Guarded so it never throws where unavailable.
     if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
+      // Was there already a controlling SW when this page loaded? If so, a later
+      // controllerchange means a NEW version took over → safe to auto-reload. On
+      // a FIRST install (no prior controller) clients.claim also fires
+      // controllerchange, but we must NOT reload then (nothing to update to).
+      var hadController = !!navigator.serviceWorker.controller;
+      var reloading = false;
+      // When a freshly deployed SW activates (it calls skipWaiting +
+      // clients.claim), reload the open app ONCE so users already in the app pick
+      // up the new build automatically — no manual reinstall, like a native app.
+      navigator.serviceWorker.addEventListener('controllerchange', function () {
+        if (!hadController || reloading) return;
+        reloading = true;
+        window.location.reload();
+      });
       window.addEventListener('load', function () {
         navigator.serviceWorker.register('service-worker.js')
+          .then(function (reg) {
+            // Actively poll for a new deploy so a long-lived PWA session updates
+            // without waiting for a relaunch: hourly, and whenever the app is
+            // brought back to the foreground (how phone users actually return).
+            var check = function () { try { reg.update(); } catch (e) {} };
+            setInterval(check, 60 * 60 * 1000);
+            document.addEventListener('visibilitychange', function () {
+              if (document.visibilityState === 'visible') check();
+            });
+          })
           .catch(function (e) { console.warn('[konek] SW registration failed:', e); });
       });
     }
@@ -8367,6 +8391,15 @@ document.addEventListener('DOMContentLoaded', async function() {
       // Pin the featured carousel: once .lst-page scrolls, this fixed-height slide
       // (default flex:0 1 auto) collapses to 0 and vanishes. Lock it open.
       '  .lst-featured-slideshow { flex: 0 0 auto !important; height: 180px !important; }',
+      // iOS flex blow-out guard: on real Safari a flex item with an <img> child
+      // can size to the image INTRINSIC width instead of `min-width:100%`, so a
+      // slide renders wider than the 1-up frame and the carousel rests permanently
+      // SPLIT (showing slide N + a sliver of N+1). Headless Chrome doesn't repro
+      // this. Hard-pin the track and every slide to exactly the frame width so a
+      // slide can never exceed it, and clip the image to the slide box.
+      '  .lst-featured-slideshow .lst-slides { width: 100% !important; max-width: 100% !important; }',
+      '  .lst-featured-slideshow .lst-slide { flex: 0 0 100% !important; width: 100% !important; min-width: 100% !important; max-width: 100% !important; }',
+      '  .lst-featured-slideshow .lst-slide img { width: 100% !important; max-width: 100% !important; height: 100% !important; object-fit: cover !important; }',
       // Carousel arrows are 40px — oversized on a phone; shrink them.
       '  .lss-arrow { width: 32px; height: 32px; font-size: 12px; }',
       // View toggle (tiled vs list) looked dead: the blanket .pc{1fr !important}

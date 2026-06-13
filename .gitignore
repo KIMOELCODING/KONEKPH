@@ -13,6 +13,8 @@ admin-src/node_modules/
 admin-src/dist/
 admin-src/public/config.js
 admin/
+# Generated incremental-build cache — not source, churns on every build
+*.tsbuildinfo
 
 # Cloudflare Pages build output (regenerated every deploy)
 dist/

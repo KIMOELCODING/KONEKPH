@@ -1,0 +1,30 @@
+:root {
+  --gd: #1a4229;
+  --gm: #245c37;
+  --gl: #2e7a46;
+  --ga: #3fa85f;
+  --gp: rgba(234, 245, 238, 0.7);
+  --gp2: #d0ebd8;
+  --gold: #c8890a;
+  --goldp: #fef8e7;
+  --red: #d94f4f;
+  --redp: #fdf0f0;
+  --bg-grad: linear-gradient(135deg, #e8f5ec 0%, #f0f7f2 35%, #e6eff8 70%, #eff2fb 100%);
+  --bg: #f0f4f1;
+  --w: #fff;
+  --glass: rgba(255, 255, 255, 0.55);
+  --glass-border: rgba(255, 255, 255, 0.7);
+  --td: #0d1f15;
+  --tm: #2b4236;
+  --ts: #4a6455;
+  --tl: #7a9688;
+  --br: #d2e0d7;
+  --br2: rgba(210, 224, 215, 0.5);
+  --sh: 0 4px 24px rgba(10, 30, 18, 0.07);
+  --sh2: 0 12px 40px rgba(10, 30, 18, 0.12);
+  --sh3: 0 24px 64px rgba(10, 30, 18, 0.18);
+  --sw: 230px;
+  --r: 16px;
+  --r2: 22px;
+  --sidebar-bg: rgba(12, 30, 18, 0.82);
+}

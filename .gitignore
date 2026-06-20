@@ -13,6 +13,15 @@ admin-src/node_modules/
 admin-src/dist/
 admin-src/public/config.js
 admin/
+
+# Marketing app (Vite + React)
+marketing-src/node_modules/
+marketing-src/dist/
+marketing-src/public/config.js
+marketing/
+
+# Public marketing site (static) — local Supabase config
+public-site/config.js
 # Generated incremental-build cache — not source, churns on every build
 *.tsbuildinfo
 

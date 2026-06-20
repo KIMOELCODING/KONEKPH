@@ -499,13 +499,13 @@ footer.site .wrap{position:relative;z-index:1}
       <h2>Buy Property</h2>
       <div class="ico"><svg viewBox="0 0 72 56" xmlns="http://www.w3.org/2000/svg"><circle cx="25" cy="15" r="10" fill="#fff"/><path d="M9 52C9 39 16 33 25 33s16 6 16 19H9z" fill="#fff"/><circle cx="44" cy="42" r="13.5" fill="#2a6238"/><circle cx="44" cy="42" r="11" fill="#fff"/><text x="44" y="48" font-size="15" font-weight="800" text-anchor="middle" fill="#2a6238" font-family="Poppins,Arial,sans-serif">$</text></svg></div>
       <p>Are you interested in buying a property? With ProList, you can find your dream property across all regions in the Philippines with just a click.</p>
-      <a href="#featured" class="btn btn-white">Find Property</a>
+      <a href="#browse" class="btn btn-white">Find Property</a>
     </div>
     <div class="bs-col">
       <h2>Sell Property</h2>
       <div class="ico"><svg viewBox="0 0 72 56" xmlns="http://www.w3.org/2000/svg"><circle cx="22" cy="15" r="10" fill="#fff"/><path d="M6 52C6 39 13 33 22 33s16 6 16 19H6z" fill="#fff"/><path d="M22 25l4 5-4 11-4-11z" fill="#2a6238"/><circle cx="50" cy="44" r="14" fill="#2a6238"/><path d="M46 34l-2.4-3.2c-.8-1 0-2.6 1.3-2.6h7.2c1.3 0 2.1 1.6 1.3 2.6L51 34c3.4 1.6 5.8 5 5.8 9 0 5-4 8.5-9 8.5s-9-3.5-9-8.5c0-4 2.4-7.4 5.8-9z" fill="#fff"/><text x="48.5" y="47.5" font-size="10" font-weight="800" text-anchor="middle" fill="#2a6238" font-family="Poppins,Arial,sans-serif">$</text></svg></div>
       <p>List and advertise your property thru ProList where it can be viewed by buyers and brokers which will expand the audience of your listing.</p>
-      <a href="https://app.prolistph.com/" class="btn btn-white">List My Property</a>
+      <a href="#inquiry" class="btn btn-white" id="sellBtn">List My Property</a>
     </div>
   </div>
 </section>
@@ -529,10 +529,15 @@ footer.site .wrap{position:relative;z-index:1}
         <input id="in-phone" name="phone" type="tel" placeholder="Contact Number">
       </div>
       <input id="in-location" name="location" type="text" placeholder="Where do you want us to contact you?">
-      <div class="captcha">
-        protected by reCAPTCHA
-        <span class="badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v4h-4"/></svg></span>
-      </div>
+      <!-- Honeypot: hidden from real users; bots that auto-fill every field trip it. -->
+      <input id="in-company" name="company" type="text" tabindex="-1" autocomplete="off" aria-hidden="true"
+        style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
+      <!-- Cloudflare Turnstile renders here when window.TURNSTILE_SITE_KEY is set in config.js -->
+      <div id="turnstile-box" style="margin-top:6px;min-height:65px"></div>
+      <p class="form-consent" style="font-size:.78rem;color:#cfe3d2;margin:12px 0 0;line-height:1.5">
+        By submitting, you agree to our <a href="privacy.html" target="_blank" rel="noopener" style="color:#fff;text-decoration:underline">Privacy Policy</a>.
+        We use your details only to respond to your inquiry.
+      </p>
       <div class="submit-row">
         <button class="btn btn-white" id="submitBtn">SUBMIT</button>
         <span id="inq-status" style="margin-left:12px;font-size:.85rem;align-self:center"></span>
@@ -566,7 +571,7 @@ footer.site .wrap{position:relative;z-index:1}
         <ul>
           <li><a href="#trust">About</a></li>
           <li><a href="#inquiry">Contact Us</a></li>
-          <li><a href="#">Privacy Policy</a></li>
+          <li><a href="privacy.html">Privacy Policy</a></li>
           <li><a href="#">Terms &amp; Conditions</a></li>
         </ul>
       </div>
@@ -614,13 +619,23 @@ footer.site .wrap{position:relative;z-index:1}
   .pv-body{max-width:1180px;margin:0 auto;padding:clamp(20px,4vw,40px) clamp(16px,4vw,48px) 80px}
 
   /* browse filters */
-  .pv-filters{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:22px}
-  .pv-filters input,.pv-filters select{padding:10px 12px;border:1.5px solid #d6e2da;border-radius:10px;
-    font:inherit;font-size:.9rem;background:#fff;color:#2a3a30;min-width:150px}
-  .pv-filters input{flex:1 1 220px}
-  .pv-filters .find{background:var(--green-700);color:#fff;border:none;border-radius:10px;padding:0 22px;
-    font-weight:600;cursor:pointer}
-  .pv-filters .find:hover{background:var(--green-800)}
+  .pv-filters{display:flex;flex-wrap:wrap;gap:12px 14px;align-items:flex-end;margin-bottom:22px;
+    background:#fff;border:1px solid #e3ece5;border-radius:14px;padding:16px}
+  .pv-field{display:flex;flex-direction:column;gap:5px;flex:1 1 150px;min-width:128px}
+  .pv-field.pv-kw{flex:2 1 230px}
+  .pv-field label{font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;color:#7a8c80;font-weight:700}
+  .pv-filters input,.pv-filters select{padding:9px 11px;border:1.5px solid #d6e2da;border-radius:9px;
+    font:inherit;font-size:.88rem;background:#fff;color:#2a3a30;width:100%}
+  .pv-range{display:flex;align-items:center;gap:6px}
+  .pv-range input{min-width:0}
+  .pv-range span{color:#9fb0a4}
+  .pv-actions{display:flex;gap:8px;flex:1 1 100%;justify-content:flex-end;margin-top:2px}
+  .pv-actions .find{background:var(--green-700);color:#fff;border:none;border-radius:9px;padding:0 26px;
+    height:38px;font-weight:600;cursor:pointer}
+  .pv-actions .find:hover{background:var(--green-800)}
+  .pv-actions .ghost{background:#fff;border:1.5px solid #d6e2da;border-radius:9px;padding:0 18px;height:38px;
+    font-weight:600;color:#5d6f63;cursor:pointer}
+  .pv-actions .ghost:hover{background:var(--green-50);color:var(--green-800)}
   .pv-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:22px}
   .pv-empty{text-align:center;color:#7a8c80;padding:60px 0}
   .pv-more{display:block;margin:34px auto 0;background:#fff;border:1.5px solid var(--green-700);
@@ -668,11 +683,42 @@ footer.site .wrap{position:relative;z-index:1}
   </div>
   <div class="pv-body">
     <div class="pv-filters">
-      <input id="bf-keyword" type="text" placeholder="Search by name or location…">
-      <select id="bf-region"><option value="">All Regions</option></select>
-      <select id="bf-category"><option value="">All Categories</option></select>
-      <select id="bf-type"><option value="">All Types</option></select>
-      <button class="find" id="bf-apply" type="button">Search</button>
+      <div class="pv-field pv-kw">
+        <label>Keyword</label>
+        <input id="bf-keyword" type="text" placeholder="Name or location…">
+      </div>
+      <div class="pv-field"><label>Region</label>
+        <select id="bf-region"><option value="">All Regions</option></select></div>
+      <div class="pv-field"><label>Province</label>
+        <select id="bf-province" disabled><option value="">All Provinces</option></select></div>
+      <div class="pv-field"><label>City</label>
+        <select id="bf-city" disabled><option value="">All Cities</option></select></div>
+      <div class="pv-field"><label>Category</label>
+        <select id="bf-category"><option value="">All Categories</option></select></div>
+      <div class="pv-field"><label>Type</label>
+        <select id="bf-type"><option value="">All Types</option></select></div>
+      <div class="pv-field"><label>Price (₱)</label>
+        <div class="pv-range">
+          <input id="bf-pmin" type="number" min="0" step="1000" placeholder="Min">
+          <span>–</span>
+          <input id="bf-pmax" type="number" min="0" step="1000" placeholder="Max">
+        </div>
+      </div>
+      <div class="pv-field"><label>Beds</label>
+        <select id="bf-beds"><option value="">Any</option><option value="1">1+</option><option value="2">2+</option><option value="3">3+</option><option value="4">4+</option><option value="5">5+</option></select></div>
+      <div class="pv-field"><label>Baths</label>
+        <select id="bf-baths"><option value="">Any</option><option value="1">1+</option><option value="2">2+</option><option value="3">3+</option><option value="4">4+</option></select></div>
+      <div class="pv-field"><label>Sort by</label>
+        <select id="bf-sort">
+          <option value="featured">Featured</option>
+          <option value="price_asc">Price: low to high</option>
+          <option value="price_desc">Price: high to low</option>
+          <option value="newest">Newest</option>
+        </select></div>
+      <div class="pv-actions">
+        <button class="ghost" id="bf-clear" type="button">Clear</button>
+        <button class="find" id="bf-apply" type="button">Search</button>
+      </div>
     </div>
     <div class="pv-grid" id="browse-grid"></div>
     <button class="pv-more" id="browse-more" type="button" style="display:none">Load more</button>
@@ -693,6 +739,7 @@ footer.site .wrap{position:relative;z-index:1}
      the ONLY thing it can write is a leads row (column-restricted). -->
 <script src="config.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 <script>
 (function () {
   var URL = window.SUPABASE_URL, KEY = window.SUPABASE_ANON_KEY;
@@ -760,13 +807,25 @@ footer.site .wrap{position:relative;z-index:1}
   }
 
   // ---- Inquiry form -----------------------------------------------------
-  var selected = { id: null, title: null };
+  var selected = { id: null, title: null, intent: null };
   function selectListing(id, title) {
-    selected = { id: id || null, title: title || null };
+    selected = { id: id || null, title: title || null, intent: null };
     var about = document.getElementById('inq-about');
     if (about) {
       if (title) { about.style.display = 'block'; about.innerHTML = 'Inquiring about: <strong>' + esc(title) + '</strong>'; }
       else { about.style.display = 'none'; about.innerHTML = ''; }
+    }
+    var form = document.getElementById('inquiry');
+    if (form) form.scrollIntoView({ behavior: 'smooth' });
+  }
+  // "List My Property" — a seller asks the team to help them post a listing.
+  // Reuses the same leads pipeline, tagged as a sell intent (no listing id).
+  function listMyProperty() {
+    selected = { id: null, title: null, intent: 'sell' };
+    var about = document.getElementById('inq-about');
+    if (about) {
+      about.style.display = 'block';
+      about.innerHTML = '<strong>Listing your property</strong> — leave your details and our team will reach out to help you get it posted.';
     }
     var form = document.getElementById('inquiry');
     if (form) form.scrollIntoView({ behavior: 'smooth' });
@@ -777,6 +836,31 @@ footer.site .wrap{position:relative;z-index:1}
     if (el) { el.textContent = msg; el.style.color = ok ? '#cdebcf' : '#ffd2d2'; }
   }
 
+  // ---- Anti-bot: honeypot + minimum fill time + optional Cloudflare Turnstile ----
+  // Turnstile renders only when window.TURNSTILE_SITE_KEY is set in config.js.
+  // NOTE: full protection also requires server-side token verification — see the
+  // planned `submit-lead` Edge Function. Until then this is a strong client-side
+  // deterrent (honeypot + timing + human challenge).
+  var formReadyAt = Date.now();
+  var MIN_FILL_MS = 2500;
+  var tsWidget = null, tsToken = '';
+  function initTurnstile() {
+    var key = window.TURNSTILE_SITE_KEY;
+    var box = document.getElementById('turnstile-box');
+    if (!key || !box || !window.turnstile || tsWidget != null) return;
+    tsWidget = window.turnstile.render(box, {
+      sitekey: key,
+      callback: function (t) { tsToken = t; },
+      'expired-callback': function () { tsToken = ''; },
+      'error-callback': function () { tsToken = ''; }
+    });
+  }
+  (function waitTurnstile(tries) {
+    if (!window.TURNSTILE_SITE_KEY) return;            // not configured → skip widget
+    if (window.turnstile) { initTurnstile(); return; }
+    if (tries > 0) setTimeout(function () { waitTurnstile(tries - 1); }, 300);
+  })(20);
+
   var submit = document.getElementById('submitBtn');
   if (submit) submit.addEventListener('click', function () {
     var val = function (id) { var e = document.getElementById(id); return e ? e.value.trim() : ''; };
@@ -786,56 +870,170 @@ footer.site .wrap{position:relative;z-index:1}
     if (!name) { setStatus('Please enter your name.', false); return; }
     if (!email && !phone) { setStatus('Please give an email or phone so we can reach you.', false); return; }
 
+    // Anti-bot gates
+    if (val('in-company')) { setStatus('Thanks! Our team will reach out shortly.', true); return; } // honeypot → silently drop
+    if (Date.now() - formReadyAt < MIN_FILL_MS) { setStatus('Please take a moment before submitting.', false); return; }
+    if (window.TURNSTILE_SITE_KEY) {
+      if (!tsToken && window.turnstile && tsWidget != null) tsToken = window.turnstile.getResponse(tsWidget) || '';
+      if (!tsToken) { setStatus('Please complete the verification check.', false); return; }
+    }
+
     var orig = submit.textContent;
     submit.disabled = true; submit.textContent = 'SENDING…'; setStatus('', true);
 
-    sb.from('leads').insert({
-      marketing_listing_id: selected.id,
-      name: name,
-      location: location || null,
-      email: email || null,
-      phone: phone ? ((cc ? cc + ' ' : '') + phone) : null,
-      message: selected.title ? ('Interested in: ' + selected.title) : null
-    }).then(function (res) {
+    function finishSubmit(errMsg) {
       submit.disabled = false;
-      if (res.error) { submit.textContent = orig; setStatus(res.error.message, false); return; }
+      if (window.turnstile && tsWidget != null) { window.turnstile.reset(tsWidget); tsToken = ''; }
+      if (errMsg) { submit.textContent = orig; setStatus(errMsg, false); return; }
       submit.textContent = 'SENT ✓';
       setStatus('Thanks! Our team will reach out shortly.', true);
       ['in-fname','in-lname','in-email','in-phone','in-location'].forEach(function (id) {
         var e = document.getElementById(id); if (e) e.value = '';
       });
+      formReadyAt = Date.now();
       setTimeout(function () { submit.textContent = orig; }, 2200);
-    });
+    }
+
+    // All lead inserts go through the submit-lead Edge Function, which verifies
+    // the Turnstile token + honeypot server-side, then inserts with the service
+    // role (anon can no longer insert directly — see migration 0030).
+    sb.functions.invoke('submit-lead', {
+      body: {
+        token: tsToken,
+        company: val('in-company'),
+        marketing_listing_id: selected.id,
+        name: name,
+        location: location || null,
+        email: email || null,
+        phone: phone ? ((cc ? cc + ' ' : '') + phone) : null,
+        message: selected.intent === 'sell'
+          ? 'Wants to LIST / SELL a property'
+          : (selected.title ? ('Interested in: ' + selected.title) : null)
+      }
+    }).then(function (res) {
+      if (res.error && res.error.context && typeof res.error.context.json === 'function') {
+        res.error.context.json()
+          .then(function (ctx) { finishSubmit((ctx && ctx.error) || 'Could not submit. Please try again.'); })
+          .catch(function () { finishSubmit('Could not submit. Please try again.'); });
+        return;
+      }
+      if (res.error) { finishSubmit('Could not submit. Please try again.'); return; }
+      if (res.data && res.data.error) { finishSubmit(res.data.error); return; }
+      finishSubmit(null);
+    }).catch(function () { finishSubmit('Network error. Please try again.'); });
   });
 
-  // ---- Filter dropdowns (data-driven) -----------------------------------
-  function fillSelect(el, values, allLabel) {
+  // ---- Filter dropdowns (DB-driven PSGC + property_types, mirrors broker app) ----
+  // Same source as the broker app's k-psgc-db: psgc_regions -> psgc_provinces
+  // (region_code) -> psgc_cities (province_code), and property_types (category->type).
+  // option.value = name (matches what listings store); option.dataset.code drives
+  // the child fetch. Duplicate names (the lookup tables are double-seeded) are
+  // collapsed client-side.
+  var psgc = { regions: null, provByRegion: {}, cityByProv: {}, types: null };
+
+  // rows: [{name, code?}]. Collapses exact-duplicate names, keeps first.
+  function fillSelect(el, placeholder, rows) {
     if (!el) return;
-    var cur = el.value;
-    el.innerHTML = '<option value="">' + allLabel + '</option>'
-      + values.map(function (v) { return '<option value="' + esc(v) + '">' + esc(v) + '</option>'; }).join('');
-    el.value = cur;
+    var seen = {}, html = '<option value="">' + esc(placeholder) + '</option>';
+    rows.forEach(function (r) {
+      if (!r.name || seen[r.name]) return;
+      seen[r.name] = 1;
+      html += '<option value="' + esc(r.name) + '"'
+        + (r.code ? ' data-code="' + esc(r.code) + '"' : '') + '>' + esc(r.name) + '</option>';
+    });
+    el.innerHTML = html;
   }
-  function loadFilters() {
-    sb.from('public_listings')
-      .select('region, category, property_type')
-      .limit(1000)
-      .then(function (res) {
-        if (res.error) { console.error('[prolist public] filters:', res.error.message); return; }
-        var rows = res.data || [];
-        var uniq = function (key) {
-          var seen = {}, out = [];
-          rows.forEach(function (r) { var v = r[key]; if (v && !seen[v]) { seen[v] = 1; out.push(v); } });
-          return out.sort();
-        };
-        var regions = uniq('region'), cats = uniq('category'), types = uniq('property_type');
-        fillSelect(document.getElementById('q-region'), regions, 'All Regions');
-        fillSelect(document.getElementById('q-category'), cats, 'All Categories');
-        fillSelect(document.getElementById('q-type'), types, 'All Types');
-        fillSelect(document.getElementById('bf-region'), regions, 'All Regions');
-        fillSelect(document.getElementById('bf-category'), cats, 'All Categories');
-        fillSelect(document.getElementById('bf-type'), types, 'All Types');
+  function resetSelect(el, placeholder) {
+    if (!el) return;
+    el.innerHTML = '<option value="">' + esc(placeholder) + '</option>';
+    el.disabled = true;
+  }
+  function codeOf(sel) {
+    if (!sel) return null;
+    var o = sel.options[sel.selectedIndex];
+    return (o && o.getAttribute('data-code')) || null;
+  }
+
+  function fetchRegions() {
+    if (psgc.regions) return Promise.resolve(psgc.regions);
+    return sb.from('psgc_regions').select('code,name').order('name').then(function (r) {
+      psgc.regions = r.error ? [] : (r.data || []);
+      return psgc.regions;
+    });
+  }
+  function fetchProvinces(code) {
+    if (!code) return Promise.resolve([]);
+    if (psgc.provByRegion[code]) return Promise.resolve(psgc.provByRegion[code]);
+    return sb.from('psgc_provinces').select('code,name').eq('region_code', code).order('name').then(function (r) {
+      psgc.provByRegion[code] = r.error ? [] : (r.data || []);
+      return psgc.provByRegion[code];
+    });
+  }
+  function fetchCities(code) {
+    if (!code) return Promise.resolve([]);
+    if (psgc.cityByProv[code]) return Promise.resolve(psgc.cityByProv[code]);
+    return sb.from('psgc_cities').select('code,name').eq('province_code', code).order('name').then(function (r) {
+      psgc.cityByProv[code] = r.error ? [] : (r.data || []);
+      return psgc.cityByProv[code];
+    });
+  }
+  function fetchTypes() {
+    if (psgc.types) return Promise.resolve(psgc.types);
+    return sb.from('property_types').select('category,type').order('category').then(function (r) {
+      var byCat = {};
+      (r.error ? [] : (r.data || [])).forEach(function (row) {
+        (byCat[row.category] = byCat[row.category] || []).push(row.type);
       });
+      psgc.types = byCat;
+      return byCat;
+    });
+  }
+
+  // Region -> Province -> City cascade for a set of selects (province/city optional).
+  function wireLocation(regionSel, provSel, citySel) {
+    if (!regionSel) return;
+    regionSel.addEventListener('change', function () {
+      if (provSel) resetSelect(provSel, 'All Provinces');
+      if (citySel) resetSelect(citySel, 'All Cities');
+      var code = codeOf(regionSel);
+      if (!code || !provSel) return;
+      fetchProvinces(code).then(function (rows) {
+        fillSelect(provSel, 'All Provinces', rows);
+        provSel.disabled = rows.length === 0;
+      });
+    });
+    if (provSel) provSel.addEventListener('change', function () {
+      if (citySel) resetSelect(citySel, 'All Cities');
+      var code = codeOf(provSel);
+      if (!code || !citySel) return;
+      fetchCities(code).then(function (rows) {
+        fillSelect(citySel, 'All Cities', rows);
+        citySel.disabled = rows.length === 0;
+      });
+    });
+  }
+  // Category -> Type cascade.
+  function wireTypes(catSel, typeSel) {
+    if (!catSel || !typeSel) return;
+    catSel.addEventListener('change', function () {
+      var types = (psgc.types && psgc.types[catSel.value]) || [];
+      fillSelect(typeSel, 'All Types', types.map(function (t) { return { name: t }; }));
+    });
+  }
+
+  function loadFilters() {
+    fetchRegions().then(function (regions) {
+      fillSelect(document.getElementById('q-region'), 'All Regions', regions);
+      fillSelect(document.getElementById('bf-region'), 'All Regions', regions);
+    });
+    fetchTypes().then(function (byCat) {
+      var cats = Object.keys(byCat).sort().map(function (c) { return { name: c }; });
+      fillSelect(document.getElementById('q-category'), 'All Categories', cats);
+      fillSelect(document.getElementById('bf-category'), 'All Categories', cats);
+    });
+    wireLocation(document.getElementById('bf-region'), document.getElementById('bf-province'), document.getElementById('bf-city'));
+    wireTypes(document.getElementById('q-category'), document.getElementById('q-type'));
+    wireTypes(document.getElementById('bf-category'), document.getElementById('bf-type'));
   }
 
   // ---- Overlay open/close -----------------------------------------------
@@ -855,22 +1053,42 @@ footer.site .wrap{position:relative;z-index:1}
   var browseState = { rows: [], offset: 0, total: 0, loading: false };
 
   function browseFilters() {
+    var v = function (id) { var e = document.getElementById(id); return e ? e.value : ''; };
     return {
-      keyword: (document.getElementById('bf-keyword') || {}).value || '',
-      region: (document.getElementById('bf-region') || {}).value || '',
-      category: (document.getElementById('bf-category') || {}).value || '',
-      type: (document.getElementById('bf-type') || {}).value || ''
+      keyword: v('bf-keyword'),
+      region: v('bf-region'),
+      province: v('bf-province'),
+      city: v('bf-city'),
+      category: v('bf-category'),
+      type: v('bf-type'),
+      pmin: v('bf-pmin'),
+      pmax: v('bf-pmax'),
+      beds: v('bf-beds'),
+      baths: v('bf-baths'),
+      sort: v('bf-sort') || 'featured'
     };
   }
   function browseQuery(f) {
     var q = sb.from('public_listings')
       .select('marketing_listing_id, public_title, price, category, property_type, city, province, region, bedrooms, bathrooms, hero_image, gallery, tags, featured, published_at', { count: 'exact' });
     if (f.region) q = q.eq('region', f.region);
+    if (f.province) q = q.eq('province', f.province);
+    if (f.city) q = q.eq('city', f.city);
     if (f.category) q = q.eq('category', f.category);
     if (f.type) q = q.eq('property_type', f.type);
-    var kw = f.keyword.trim().replace(/[%,]/g, '');
+    var num = function (x) { var n = parseFloat(x); return isNaN(n) ? null : n; };
+    var pmin = num(f.pmin), pmax = num(f.pmax), beds = num(f.beds), baths = num(f.baths);
+    if (pmin != null) q = q.gte('price', pmin);
+    if (pmax != null) q = q.lte('price', pmax);
+    if (beds != null) q = q.gte('bedrooms', beds);
+    if (baths != null) q = q.gte('bathrooms', baths);
+    var kw = (f.keyword || '').trim().replace(/[%,]/g, '');
     if (kw) { var p = '%' + kw + '%'; q = q.or('public_title.ilike.' + p + ',city.ilike.' + p + ',province.ilike.' + p); }
-    return q.order('featured', { ascending: false }).order('published_at', { ascending: false });
+    if (f.sort === 'price_asc') q = q.order('price', { ascending: true });
+    else if (f.sort === 'price_desc') q = q.order('price', { ascending: false });
+    else if (f.sort === 'newest') q = q.order('published_at', { ascending: false });
+    else q = q.order('featured', { ascending: false }).order('published_at', { ascending: false });
+    return q;
   }
   function renderBrowse(reset) {
     var grid = document.getElementById('browse-grid');
@@ -989,11 +1207,29 @@ footer.site .wrap{position:relative;z-index:1}
     copy('q-keyword', 'bf-keyword');
     copy('q-region', 'bf-region');
     copy('q-category', 'bf-category');
-    copy('q-type', 'bf-type');
+    // Setting .value programmatically doesn't fire 'change', so cascade manually:
+    var bfP = document.getElementById('bf-province');
+    var bfC = document.getElementById('bf-city');
+    if (bfP) resetSelect(bfP, 'All Provinces');
+    if (bfC) resetSelect(bfC, 'All Cities');
+    var rcode = codeOf(document.getElementById('bf-region'));
+    if (rcode && bfP) fetchProvinces(rcode).then(function (rows) {
+      fillSelect(bfP, 'All Provinces', rows); bfP.disabled = rows.length === 0;
+    });
+    var bfCat = document.getElementById('bf-category');
+    var bfType = document.getElementById('bf-type');
+    if (bfCat && bfType) {
+      var types = (psgc.types && psgc.types[bfCat.value]) || [];
+      fillSelect(bfType, 'All Types', types.map(function (t) { return { name: t }; }));
+      var qType = document.getElementById('q-type');
+      if (qType) bfType.value = qType.value;
+    }
     location.hash = '#browse';
   }
   var findBtn = document.getElementById('findBtn');
   if (findBtn) findBtn.addEventListener('click', openBrowseFromHero);
+  var sellBtn = document.getElementById('sellBtn');
+  if (sellBtn) sellBtn.addEventListener('click', function (e) { e.preventDefault(); listMyProperty(); });
   var qkw = document.getElementById('q-keyword');
   if (qkw) qkw.addEventListener('keydown', function (e) { if (e.key === 'Enter') openBrowseFromHero(); });
 
@@ -1001,6 +1237,21 @@ footer.site .wrap{position:relative;z-index:1}
   if (bfApply) bfApply.addEventListener('click', function () { renderBrowse(true); });
   var bfkw = document.getElementById('bf-keyword');
   if (bfkw) bfkw.addEventListener('keydown', function (e) { if (e.key === 'Enter') renderBrowse(true); });
+  ['bf-pmin', 'bf-pmax'].forEach(function (id) {
+    var e = document.getElementById(id);
+    if (e) e.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') renderBrowse(true); });
+  });
+  var bfSort = document.getElementById('bf-sort');
+  if (bfSort) bfSort.addEventListener('change', function () { renderBrowse(true); });
+  var bfClear = document.getElementById('bf-clear');
+  if (bfClear) bfClear.addEventListener('click', function () {
+    ['bf-keyword', 'bf-pmin', 'bf-pmax'].forEach(function (id) { var e = document.getElementById(id); if (e) e.value = ''; });
+    ['bf-region', 'bf-category', 'bf-type', 'bf-beds', 'bf-baths'].forEach(function (id) { var e = document.getElementById(id); if (e) e.value = ''; });
+    resetSelect(document.getElementById('bf-province'), 'All Provinces');
+    resetSelect(document.getElementById('bf-city'), 'All Cities');
+    var s = document.getElementById('bf-sort'); if (s) s.value = 'featured';
+    renderBrowse(true);
+  });
   var bMore = document.getElementById('browse-more');
   if (bMore) bMore.addEventListener('click', function () { renderBrowse(false); });
 

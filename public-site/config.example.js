@@ -10,3 +10,10 @@
 
 window.SUPABASE_URL = "https://YOUR-PROJECT-REF.supabase.co";
 window.SUPABASE_ANON_KEY = "YOUR-ANON-PUBLIC-KEY";
+
+// Cloudflare Turnstile site key (PUBLIC — safe in the browser). Leave empty to
+// disable the anti-bot widget. Create one at Cloudflare dashboard → Turnstile,
+// add your domain (and 127.0.0.1 / localhost for testing), and paste the SITE
+// key here. The matching SECRET key goes in the Supabase Edge Function env
+// (TURNSTILE_SECRET_KEY) once the submit-lead function is built.
+window.TURNSTILE_SITE_KEY = "";

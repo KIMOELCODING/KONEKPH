@@ -83,6 +83,11 @@ document.addEventListener('DOMContentLoaded', async function() {
 
   // Error sink persists across replaceWith since it's on window, not the DOM.
   window.addEventListener('error', function(e) {
+    // Resource-load failures (404 image/font/script) fire here too, with e.target
+    // set to the failing element (not window) and no e.message. A missing listing
+    // image must NOT paint a full-width red banner — only surface genuine uncaught
+    // JS exceptions (e.target === window, real message).
+    if ((e.target && e.target !== window) || !e.message) return;
     var p = document.body || document.documentElement;
     var d = document.getElementById('__bundler_err') || p.appendChild(document.createElement('div'));
     d.id = '__bundler_err';

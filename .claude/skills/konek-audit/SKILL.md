@@ -92,7 +92,7 @@ Produce an up-to-date checklist of what works, what's stubbed, what's buggy, and
 - PayMongo billing — placeholder `alert` at [index.html:1667](../../../index.html#L1667); no `paymongo-create-source` Edge Function
 - Trial/subscription enforcement relaxed in [0011_relax_listing_gate.sql](../../../supabase/migrations/0011_relax_listing_gate.sql) (intentional deferral)
 - Premium page copy still shows ₱999/Enterprise (~3 hits)
-- Broker-profile "Message" button (chat plumbing exists, no UI entry point)
+- ~~Broker-profile "Message" button~~ — **SHIPPED** (`k-broker-profile` script, `#bp-message-btn` → `__konekStartChat({brokerId})`; shows for other brokers, hidden for self/no-context; reachable from listing-detail + chat "View Profile"). Verified 2026-06-08 via CDP. Do not re-flag.
 - ~~Chat photo attachments~~ — **DESCOPED 2026-05-31** (will not build; do not re-flag)
 - ~~AdminUsers page~~ — **SHIPPED 2026-05-31**
 - Broker matching by service area (schema only)

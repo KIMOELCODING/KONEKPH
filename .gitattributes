@@ -1,2 +1,4 @@
 # Keep shell scripts LF so they run on Cloudflare's Linux build environment.
 *.sh text eol=lf
+# Git hooks are POSIX shell with no .sh extension — a CRLF shebang breaks them.
+.githooks/* text eol=lf

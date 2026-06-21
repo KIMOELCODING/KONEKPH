@@ -1,0 +1,16 @@
+#!/bin/sh
+# ProList pre-commit guard: never commit an unbootable index.html.
+# Enable once per clone with:  git config core.hooksPath .githooks
+#
+# When index.html is staged, validate the STAGED blob (not the working tree) so
+# partial-staging can't sneak a broken bundle past the check.
+if git diff --cached --name-only | grep -q '^index\.html$'; then
+  if ! git show :index.html | node scripts/check-bundle.cjs; then
+    echo "" >&2
+    echo "pre-commit: index.html bundle is invalid — commit aborted." >&2
+    echo "  Run: node scripts/check-bundle.cjs   (after fixing) to re-check." >&2
+    echo "  To bypass in an emergency: git commit --no-verify" >&2
+    exit 1
+  fi
+fi
+exit 0

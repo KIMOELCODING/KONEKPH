@@ -29,6 +29,10 @@ export default function AdminUsers() {
   const [toast, setToast] = useState<{ msg: string; err?: boolean } | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [meId, setMeId] = useState<string | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createForm, setCreateForm] = useState({ first_name: '', last_name: '', email: '', password: '' });
+  const [createErr, setCreateErr] = useState<string | null>(null);
 
   useEffect(() => {
     sb.auth.getUser().then(({ data }) => setMeId(data.user?.id ?? null));
@@ -96,6 +100,32 @@ export default function AdminUsers() {
     }
   }
 
+  async function createMarketing() {
+    setCreateErr(null);
+    const { first_name, last_name, email, password } = createForm;
+    if (!first_name.trim() || !last_name.trim()) { setCreateErr('First and last name are required.'); return; }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) { setCreateErr('Enter a valid email.'); return; }
+    if (password.length < 8) { setCreateErr('Password must be at least 8 characters.'); return; }
+    setCreating(true);
+    const { data, error } = await sb.functions.invoke('create-marketing-user', {
+      body: { first_name: first_name.trim(), last_name: last_name.trim(), email: email.trim(), password },
+    });
+    setCreating(false);
+    // Edge Function returns a non-2xx with { error } on failure — supabase-js
+    // surfaces that as `error` (FunctionsHttpError); read the body for the message.
+    if (error) {
+      let msg = error.message;
+      try { const ctx = await (error as any).context?.json?.(); if (ctx?.error) msg = ctx.error; } catch { /* ignore */ }
+      setCreateErr(msg);
+      return;
+    }
+    if ((data as any)?.error) { setCreateErr((data as any).error); return; }
+    setShowCreate(false);
+    setCreateForm({ first_name: '', last_name: '', email: '', password: '' });
+    showToast(`Marketing account created for ${first_name} ${last_name}.`);
+    load();
+  }
+
   const confirmCopy = (c: Confirm) => {
     const nm = `${c.profile.first_name} ${c.profile.last_name}`;
     switch (c.kind) {
@@ -126,6 +156,7 @@ export default function AdminUsers() {
               <option value="active">Active</option>
               <option value="deactivated">Deactivated</option>
             </select>
+            <button className="btn btn-primary" onClick={() => { setCreateErr(null); setShowCreate(true); }}><i className="fa-solid fa-user-plus"></i> Marketing account</button>
             <button className="btn btn-ghost" onClick={load}><i className="fa-solid fa-arrows-rotate"></i> Refresh</button>
           </div>
         </div>
@@ -195,6 +226,38 @@ export default function AdminUsers() {
           </div>
         );
       })()}
+
+      {showCreate && (
+        <div className="modal-overlay" onClick={() => !creating && setShowCreate(false)}>
+          <div className="modal-box" onClick={e => e.stopPropagation()} style={{ maxWidth: 440 }}>
+            <h2>New marketing account</h2>
+            <p className="modal-sub">Creates a marketing-portal login (role = marketing). They can curate listings and handle leads, but can't see broker PII or this admin portal.</p>
+            {createErr && <div className="alert alert-error" style={{ marginBottom: 12 }}><i className="fa-solid fa-circle-exclamation"></i> {createErr}</div>}
+            <div className="row" style={{ gap: 10 }}>
+              <div className="field" style={{ flex: 1 }}>
+                <label>First name</label>
+                <input className="input" value={createForm.first_name} onChange={e => setCreateForm(f => ({ ...f, first_name: e.target.value }))} />
+              </div>
+              <div className="field" style={{ flex: 1 }}>
+                <label>Last name</label>
+                <input className="input" value={createForm.last_name} onChange={e => setCreateForm(f => ({ ...f, last_name: e.target.value }))} />
+              </div>
+            </div>
+            <div className="field">
+              <label>Email</label>
+              <input className="input" type="email" autoComplete="off" value={createForm.email} onChange={e => setCreateForm(f => ({ ...f, email: e.target.value }))} placeholder="name@prolist.ph" />
+            </div>
+            <div className="field">
+              <label>Temporary password</label>
+              <input className="input" type="text" autoComplete="new-password" value={createForm.password} onChange={e => setCreateForm(f => ({ ...f, password: e.target.value }))} placeholder="At least 8 characters" />
+            </div>
+            <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
+              <button className="btn btn-secondary" disabled={creating} onClick={() => setShowCreate(false)}>Cancel</button>
+              <button className="btn btn-primary" disabled={creating} onClick={createMarketing}>{creating ? 'Creating…' : 'Create account'}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toast && <div className={'toast' + (toast.err ? ' error' : '')}><i className={'fa-solid ' + (toast.err ? 'fa-circle-exclamation' : 'fa-circle-check')}></i> {toast.msg}</div>}
     </>

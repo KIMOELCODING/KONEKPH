@@ -7096,7 +7096,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Persistent cache in localStorage. Bump version to invalidate after a
     // PSGC reload. Each lookup is stored under its own key so we don't have
     // to read all 42k barangays just to refresh one region.
-    var LS_VERSION = 'v1';
+    var LS_VERSION = 'v2';
     var LS_PREFIX  = 'konek.psgc.' + LS_VERSION + '.';
     function lsGet(key){
       try { var v = localStorage.getItem(LS_PREFIX + key); return v ? JSON.parse(v) : null; }

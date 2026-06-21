@@ -91,7 +91,7 @@ Produce an up-to-date checklist of what works, what's stubbed, what's buggy, and
 ### Not wired
 - PayMongo billing — placeholder `alert` at [index.html:1667](../../../index.html#L1667); no `paymongo-create-source` Edge Function
 - Trial/subscription enforcement relaxed in [0011_relax_listing_gate.sql](../../../supabase/migrations/0011_relax_listing_gate.sql) (intentional deferral)
-- Premium page copy still shows ₱999/Enterprise (~3 hits)
+- ~~Premium page copy shows ₱999/Enterprise~~ — **FIXED** (0 hits, verified 2026-06-21)
 - ~~Broker-profile "Message" button~~ — **SHIPPED** (`k-broker-profile` script, `#bp-message-btn` → `__konekStartChat({brokerId})`; shows for other brokers, hidden for self/no-context; reachable from listing-detail + chat "View Profile"). Verified 2026-06-08 via CDP. Do not re-flag.
 - ~~Chat photo attachments~~ — **DESCOPED 2026-05-31** (will not build; do not re-flag)
 - ~~AdminUsers page~~ — **SHIPPED 2026-05-31**
@@ -108,6 +108,15 @@ Produce an up-to-date checklist of what works, what's stubbed, what's buggy, and
 - Listings keyset pagination + infinite scroll (still flat-limited)
 - Supabase image transforms for grid + carousel thumbnails (download at thumb size)
 - Verify service-worker registration (PWA install)
+
+### Done this session (2026-06-21)
+- **STRUCTURE CHANGE:** `index.html` is now a self-unpacking **bundler** (app HTML inside a `<script type="__bundler/template">` JSON string + `__bundler/manifest` base64). **Old line anchors in this baseline are stale** — grep by content. PayMongo placeholder is now a toast (~index.html:2022), not the line-1667 `alert`.
+- **P0 fixed** — commit 974ce18 pasted multi-line Premium HTML (18 raw newlines) into the template JSON string → `JSON.parse` threw → whole app dead with "Bundle unpack error". Fixed by escaping the control chars (`e201af2`); verified booting in headless Chrome.
+- **Pre-commit guard added** ([scripts/check-bundle.cjs](../../../scripts/check-bundle.cjs) + `.githooks/pre-commit`, `core.hooksPath=.githooks`) — blocks committing an `index.html` whose `__bundler/*` JSON won't parse.
+- **`[bundle] error` banner** no longer fires on benign resource 404s (`f96b9ff`) — the window error sink now ignores resource-load failures (e.target≠window / no message).
+- **PSGC deduped** — migration `0031_dedup_psgc.sql`: dropped 2 curated-duplicate region subtrees (19→17 regions, 0 dup names), Title-cased region/province/city names, repointed listings; PSGC localStorage cache bumped `v1`→`v2`. Barangays left ALL-CAPS (optional follow-up).
+- **Dummy "Modern 3BR House" listing deleted** from live DB.
+- Verified clean: migrations 0001–0031 no dup prefixes; admin no TODO/alert/prompt; billing master switch `__konekBillingEnabled=false`; calYr dynamic.
 
 ### Done this session (2026-06-01)
 - **Calendar "today" fully dynamic** — `renderWeekView` was the last holdout (hardcoded `new Date(2026,4,6)` anchor + `day.getDate()===6 && getMonth()===4` highlight). Now `new Date()` anchor + real date/month/year highlight comparison, matching mini-cal/big-cal.

@@ -33,6 +33,10 @@ export default function AdminUsers() {
   const [creating, setCreating] = useState(false);
   const [createForm, setCreateForm] = useState({ first_name: '', last_name: '', email: '', password: '' });
   const [createErr, setCreateErr] = useState<string | null>(null);
+  const [resetTarget, setResetTarget] = useState<Profile | null>(null);
+  const [resetPw, setResetPw] = useState('');
+  const [resetting, setResetting] = useState(false);
+  const [resetErr, setResetErr] = useState<string | null>(null);
 
   useEffect(() => {
     sb.auth.getUser().then(({ data }) => setMeId(data.user?.id ?? null));
@@ -126,6 +130,36 @@ export default function AdminUsers() {
     load();
   }
 
+  function openReset(p: Profile) {
+    setResetTarget(p);
+    setResetPw('');
+    setResetErr(null);
+  }
+
+  async function resetPassword() {
+    if (!resetTarget) return;
+    setResetErr(null);
+    if (resetPw.length < 8) { setResetErr('Password must be at least 8 characters.'); return; }
+    setResetting(true);
+    const { data, error } = await sb.functions.invoke('reset-marketing-password', {
+      body: { user_id: resetTarget.id, password: resetPw },
+    });
+    setResetting(false);
+    // Edge Function returns a non-2xx with { error } on failure — supabase-js
+    // surfaces that as `error` (FunctionsHttpError); read the body for the message.
+    if (error) {
+      let msg = error.message;
+      try { const ctx = await (error as any).context?.json?.(); if (ctx?.error) msg = ctx.error; } catch { /* ignore */ }
+      setResetErr(msg);
+      return;
+    }
+    if ((data as any)?.error) { setResetErr((data as any).error); return; }
+    const nm = `${resetTarget.first_name} ${resetTarget.last_name}`;
+    setResetTarget(null);
+    setResetPw('');
+    showToast(`Password reset for ${nm}. Share the new password with them.`);
+  }
+
   const confirmCopy = (c: Confirm) => {
     const nm = `${c.profile.first_name} ${c.profile.last_name}`;
     switch (c.kind) {
@@ -195,6 +229,9 @@ export default function AdminUsers() {
                     <td className="muted txt-sm">{fmtDate(p.created_at)}</td>
                     <td style={{ textAlign: 'right' }}>
                       <div className="row" style={{ justifyContent: 'flex-end' }}>
+                        {p.role === 'marketing' && (
+                          <button className="btn btn-secondary" disabled={busy === p.id} onClick={() => openReset(p)} title="Set a new login password for this marketing account"><i className="fa-solid fa-key"></i> Reset password</button>
+                        )}
                         {p.role === 'admin'
                           ? <button className="btn btn-secondary" disabled={busy === p.id || isMe} title={isMe ? "You can't change your own role" : ''} onClick={() => setConfirm({ profile: p, kind: 'demote' })}>Set broker</button>
                           : <button className="btn btn-secondary" disabled={busy === p.id} onClick={() => setConfirm({ profile: p, kind: 'promote' })}>Make admin</button>}
@@ -254,6 +291,24 @@ export default function AdminUsers() {
             <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
               <button className="btn btn-secondary" disabled={creating} onClick={() => setShowCreate(false)}>Cancel</button>
               <button className="btn btn-primary" disabled={creating} onClick={createMarketing}>{creating ? 'Creating…' : 'Create account'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {resetTarget && (
+        <div className="modal-overlay" onClick={() => !resetting && setResetTarget(null)}>
+          <div className="modal-box" onClick={e => e.stopPropagation()} style={{ maxWidth: 440 }}>
+            <h2>Reset marketing password</h2>
+            <p className="modal-sub">Set a new login password for <strong>{resetTarget.first_name} {resetTarget.last_name}</strong> ({resetTarget.email}). They'll use it to sign in to the marketing portal — share it with them over a secure channel and have them change it after.</p>
+            {resetErr && <div className="alert alert-error" style={{ marginBottom: 12 }}><i className="fa-solid fa-circle-exclamation"></i> {resetErr}</div>}
+            <div className="field">
+              <label>New password</label>
+              <input className="input" type="text" autoComplete="new-password" value={resetPw} onChange={e => setResetPw(e.target.value)} placeholder="At least 8 characters" />
+            </div>
+            <div className="row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
+              <button className="btn btn-secondary" disabled={resetting} onClick={() => setResetTarget(null)}>Cancel</button>
+              <button className="btn btn-primary" disabled={resetting} onClick={resetPassword}>{resetting ? 'Resetting…' : 'Set password'}</button>
             </div>
           </div>
         </div>

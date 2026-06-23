@@ -9,7 +9,7 @@ export interface Profile {
   prc_id_url: string | null;
   is_approved: boolean;
   approved_at: string | null;
-  role: 'broker' | 'admin';
+  role: 'broker' | 'admin' | 'marketing';
   subscription_status: string;
   created_at: string;
 }

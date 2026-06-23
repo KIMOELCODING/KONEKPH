@@ -14,6 +14,10 @@
 /admin/assets/*
   Cache-Control: public, max-age=31536000, immutable
 
+# Same for the marketing portal's content-hashed bundles.
+/marketing/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
 # App shell, service worker, manifest and runtime config must always revalidate
 # so a fresh deploy is picked up immediately. With a validator (ETag) this means
 # a returning visitor sends a conditional request and gets a tiny 304 when
@@ -33,4 +37,10 @@
 /admin/index.html
   Cache-Control: no-cache
 /admin/config.js
+  Cache-Control: no-cache
+/marketing/
+  Cache-Control: no-cache
+/marketing/index.html
+  Cache-Control: no-cache
+/marketing/config.js
   Cache-Control: no-cache

@@ -22,7 +22,7 @@ if (configMissing) {
     root.innerHTML = `
       <div class="login-shell">
         <div class="login-card">
-          <div class="brand"><div class="logo-mark">K</div><div><h1>Setup required</h1></div></div>
+          <div class="brand"><div class="logo-mark">P</div><div><h1>Setup required</h1></div></div>
           <div class="alert alert-error" style="margin-top:12px"><i class="fa-solid fa-circle-exclamation"></i>
             Admin app configuration is missing. <code>config.js</code> did not load, or contains placeholder values. Please contact your administrator.
           </div>

@@ -106,7 +106,7 @@ export default function App() {
     return (
       <div className="login-shell">
         <div className="login-card">
-          <div className="brand"><div className="logo-mark">K</div><div><h1>Connection problem</h1></div></div>
+          <div className="brand"><div className="logo-mark">P</div><div><h1>Connection problem</h1></div></div>
           <div className="alert alert-error"><i className="fa-solid fa-circle-exclamation"></i> {auth.reason}</div>
           <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} onClick={() => { setAuth({ kind: 'loading' }); resolveAuth(); }}>
             Retry
@@ -126,7 +126,7 @@ export default function App() {
     return (
       <div className="login-shell">
         <div className="login-card">
-          <div className="brand"><div className="logo-mark">K</div><div><h1>Access Denied</h1></div></div>
+          <div className="brand"><div className="logo-mark">P</div><div><h1>Access Denied</h1></div></div>
           <p className="sub">This account is not an admin. Brokers log in at the main app.</p>
           <button className="btn btn-primary" style={{ width: '100%' }} onClick={async () => {
             await sb.auth.signOut();

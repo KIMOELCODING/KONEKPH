@@ -9,7 +9,8 @@ insert into storage.buckets (id, name, public) values
   ('id-documents',  'id-documents',  false),
   ('avatars',       'avatars',       true),
   ('listing-images','listing-images',true),
-  ('article-images','article-images',true)
+  ('article-images','article-images',true),
+  ('moa-documents', 'moa-documents', false)
 on conflict (id) do nothing;
 
 -- ============================================================
@@ -106,3 +107,27 @@ drop policy if exists "article_images admin delete" on storage.objects;
 create policy "article_images admin delete" on storage.objects
   for delete to authenticated
   using (bucket_id = 'article-images' and public.is_admin());
+
+-- moa-documents (private): per-listing MOA PDFs at {broker_id}/{agreement_id}/...
+-- Read = owner folder OR admin (cross-party); write = admin / service role only.
+-- See migration 0032_moa_esignature.sql for the authoritative copy.
+drop policy if exists "moa owner+admin read" on storage.objects;
+create policy "moa owner+admin read" on storage.objects
+  for select to authenticated
+  using (
+    bucket_id = 'moa-documents'
+    and (
+      (storage.foldername(name))[1] = auth.uid()::text
+      or public.is_admin()
+    )
+  );
+
+drop policy if exists "moa admin write" on storage.objects;
+create policy "moa admin write" on storage.objects
+  for insert to authenticated
+  with check (bucket_id = 'moa-documents' and public.is_admin());
+
+drop policy if exists "moa admin update" on storage.objects;
+create policy "moa admin update" on storage.objects
+  for update to authenticated
+  using (bucket_id = 'moa-documents' and public.is_admin());

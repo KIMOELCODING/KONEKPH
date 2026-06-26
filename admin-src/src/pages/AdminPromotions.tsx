@@ -130,14 +130,13 @@ export default function AdminPromotions() {
 
   async function toggleActive(s: PromotedSlide) {
     setBusy(s.id);
-    const { error } = await sb
-      .from('promoted_slides')
-      .update({ is_active: !s.is_active })
-      .eq('id', s.id);
+    const next = !s.is_active;
+    const { error } = await sb.from('promoted_slides').update({ is_active: next }).eq('id', s.id);
     setBusy(null);
     if (error) { showToast(error.message, true); return; }
     showToast(s.is_active ? 'Deactivated.' : 'Activated.');
-    load();
+    // Patch the single row instead of re-fetching the whole list.
+    setRows(rs => rs?.map(r => (r.id === s.id ? { ...r, is_active: next } : r)) ?? rs);
   }
 
   async function move(s: PromotedSlide, dir: -1 | 1) {
@@ -151,7 +150,18 @@ export default function AdminPromotions() {
     const [r1, r2] = await Promise.all([a, b]);
     setBusy(null);
     if (r1.error || r2.error) { showToast((r1.error || r2.error)!.message, true); return; }
-    load();
+    // Swap the two sort_orders locally and re-sort to match the server ordering
+    // (sort_order asc, then created_at desc) — no full re-fetch.
+    setRows(rs => {
+      if (!rs) return rs;
+      const patched = rs.map(r =>
+        r.id === s.id ? { ...r, sort_order: swap.sort_order }
+        : r.id === swap.id ? { ...r, sort_order: s.sort_order }
+        : r);
+      return patched.slice().sort((x, y) =>
+        x.sort_order - y.sort_order ||
+        (new Date(y.created_at).getTime() - new Date(x.created_at).getTime()));
+    });
   }
 
   async function remove(s: PromotedSlide) {

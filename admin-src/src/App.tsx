@@ -9,6 +9,7 @@ import Shell from './components/Shell';
 // and each admin page becomes a separate chunk.
 const BrokerApprovals  = lazy(() => import('./pages/BrokerApprovals'));
 const ListingApprovals = lazy(() => import('./pages/ListingApprovals'));
+const ManageListings   = lazy(() => import('./pages/ManageListings'));
 const Reports          = lazy(() => import('./pages/Reports'));
 const AdminArticles    = lazy(() => import('./pages/AdminArticles'));
 const AdminPromotions  = lazy(() => import('./pages/AdminPromotions'));
@@ -152,6 +153,7 @@ export default function App() {
           <Route path="/" element={<Navigate to="/brokers" replace />} />
           <Route path="/brokers" element={<BrokerApprovals />} />
           <Route path="/listings" element={<ListingApprovals />} />
+          <Route path="/manage-listings" element={<ManageListings />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/articles" element={<AdminArticles />} />
           <Route path="/promotions" element={<AdminPromotions />} />

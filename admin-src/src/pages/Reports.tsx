@@ -18,6 +18,15 @@ function publicImg(path: string | undefined): string | null {
   return `${base}/storage/v1/object/public/listing-images/${path}`;
 }
 
+// Small transformed thumbnail for the report card image (full original loads in
+// the report detail modal). Uses the SDK transform like the broker app's __plImg.
+function thumbImg(path: string | undefined): string | null {
+  if (!path) return null;
+  return sb.storage.from('listing-images')
+    .getPublicUrl(path, { transform: { width: 400, height: 300, resize: 'cover', quality: 70 } })
+    .data.publicUrl || null;
+}
+
 function reporterName(r: Report): string {
   return `${r.profiles?.first_name ?? ''} ${r.profiles?.last_name ?? ''}`.trim() || '—';
 }
@@ -124,7 +133,7 @@ export default function Reports() {
         <div className="lst-grid">
           {rows.map(r => {
             const l = r.listings;
-            const img = publicImg(l?.images?.[0]);
+            const img = thumbImg(l?.images?.[0]);
             return (
               <div key={r.id} className="lst-card">
                 <div

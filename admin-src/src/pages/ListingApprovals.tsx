@@ -1,7 +1,26 @@
 import { useEffect, useState } from 'react';
 import { sb } from '../lib/supabase';
-import type { Listing } from '../types';
+import type { Listing, MoaAgreement } from '../types';
 import RejectModal from '../components/RejectModal';
+
+// The per-listing MOA is unique on listing_id, so the embed returns 0 or 1 row.
+function moaOf(l: Listing): MoaAgreement | null {
+  return l.moa_agreements?.[0] ?? null;
+}
+
+const MOA_LABEL: Record<MoaAgreement['status'], string> = {
+  pending: 'MOA not sent',
+  sent: 'MOA sent — awaiting signature',
+  signed: 'MOA signed',
+  declined: 'MOA declined by broker',
+};
+
+const MOA_COLOR: Record<MoaAgreement['status'], string> = {
+  pending: '#94a3b8',
+  sent: '#d97706',
+  signed: '#16a34a',
+  declined: '#dc2626',
+};
 
 function peso(n: number) {
   return '₱' + n.toLocaleString('en-PH');
@@ -18,6 +37,15 @@ function publicImg(path: string | undefined): string | null {
   return `${base}/storage/v1/object/public/listing-images/${path}`;
 }
 
+// Small transformed thumbnail for card images (the full original loads only in
+// the details modal). Uses the SDK transform like the broker app's __plImg.
+function thumbImg(path: string | undefined): string | null {
+  if (!path) return null;
+  return sb.storage.from('listing-images')
+    .getPublicUrl(path, { transform: { width: 400, height: 300, resize: 'cover', quality: 70 } })
+    .data.publicUrl || null;
+}
+
 function fullAddress(l: Listing): string {
   return [l.street_address, l.barangay, l.city, l.province, l.region]
     .filter(Boolean)
@@ -31,17 +59,19 @@ export default function ListingApprovals() {
   const [viewing, setViewing] = useState<Listing | null>(null);
   const [rejecting, setRejecting] = useState<Listing | null>(null);
 
-  async function load() {
+  async function load(): Promise<Listing[] | null> {
     const { data, error } = await sb
       .from('listings')
-      .select('id, broker_id, title, category, property_type, price, region, province, city, barangay, street_address, lot_area_sqm, floor_area_sqm, bedrooms, bathrooms, amenities, description, images, status, rejection_reason, created_at, profiles!broker_id(first_name,last_name,phone,email,license_number)')
+      .select('id, broker_id, title, category, property_type, price, region, province, city, barangay, street_address, lot_area_sqm, floor_area_sqm, bedrooms, bathrooms, amenities, description, images, status, rejection_reason, created_at, profiles!broker_id(first_name,last_name,phone,email,license_number), moa_agreements(id,status,signed_pdf_path,broker_signed_at)')
       .eq('status', 'pending')
       .order('created_at', { ascending: false });
-    if (error) { setToast({ msg: error.message, err: true }); return; }
+    if (error) { setToast({ msg: error.message, err: true }); return null; }
     // supabase-js infers the embedded `profiles!broker_id(...)` as an array, but
     // a to-one FK embed returns a single object at runtime (and the UI reads it
     // as one). Cast through unknown to reconcile the type with reality.
-    setRows((data ?? []) as unknown as Listing[]);
+    const next = (data ?? []) as unknown as Listing[];
+    setRows(next);
+    return next;
   }
 
   useEffect(() => { load(); }, []);
@@ -51,7 +81,45 @@ export default function ListingApprovals() {
     setTimeout(() => setToast(null), 2800);
   }
 
+  async function sendMoa(l: Listing) {
+    setBusy(l.id);
+    const { error } = await sb.functions.invoke('moa', {
+      body: { action: 'generate', listing_id: l.id },
+    });
+    setBusy(null);
+    if (error) {
+      // surface the function's JSON error body when available
+      let msg = error.message;
+      try {
+        const ctx = (error as { context?: { json?: () => Promise<{ error?: string }> } }).context;
+        const j = ctx?.json ? await ctx.json() : null;
+        if (j?.error) msg = j.error;
+      } catch { /* ignore */ }
+      showToast(msg, true);
+      return;
+    }
+    showToast('MOA sent to broker for signing.');
+    const next = await load();
+    // Use the freshly-loaded rows (not the stale closed-over `rows`) so the open
+    // details modal reflects the new "MOA sent" status immediately.
+    setViewing(v => (v && next ? next.find(r => r.id === v.id) ?? v : v));
+  }
+
+  async function viewSignedMoa(l: Listing) {
+    const moa = moaOf(l);
+    if (!moa?.signed_pdf_path) { showToast('No signed MOA yet.', true); return; }
+    const { data, error } = await sb.storage
+      .from('moa-documents')
+      .createSignedUrl(moa.signed_pdf_path, 120);
+    if (error || !data?.signedUrl) { showToast(error?.message ?? 'Could not open MOA.', true); return; }
+    window.open(data.signedUrl, '_blank', 'noopener');
+  }
+
   async function approve(l: Listing) {
+    if (moaOf(l)?.status !== 'signed') {
+      showToast('The broker must sign the MOA before you can approve this listing.', true);
+      return;
+    }
     setBusy(l.id);
     const { data: { user } } = await sb.auth.getUser();
     const { error } = await sb
@@ -106,6 +174,35 @@ export default function ListingApprovals() {
     setRows(rs => rs?.filter(r => r.id !== l.id) ?? rs);
   }
 
+  // MOA-aware action buttons, shared by the card and the details modal.
+  function moaActions(l: Listing) {
+    const status = moaOf(l)?.status;
+    const signed = status === 'signed';
+    return (
+      <>
+        {signed ? (
+          <button className="btn btn-secondary" disabled={busy === l.id} onClick={() => viewSignedMoa(l)}>
+            <i className="fa-regular fa-file-lines"></i> Signed MOA
+          </button>
+        ) : (
+          <button className="btn btn-secondary" disabled={busy === l.id || status === 'sent'} onClick={() => sendMoa(l)}>
+            <i className="fa-regular fa-paper-plane"></i> {status === 'sent' ? 'MOA sent' : 'Send MOA'}
+          </button>
+        )}
+        <button className="btn btn-danger" disabled={busy === l.id} onClick={() => setRejecting(l)}>Decline</button>
+        <button
+          className="btn btn-primary"
+          disabled={busy === l.id || !signed}
+          onClick={() => approve(l)}
+          title={signed ? undefined : 'The broker must sign the MOA before approval'}
+          style={{ flex: 1, justifyContent: 'center' }}
+        >
+          Approve
+        </button>
+      </>
+    );
+  }
+
   return (
     <>
     <div className="card">
@@ -128,7 +225,7 @@ export default function ListingApprovals() {
       {rows && rows.length > 0 && (
         <div className="lst-grid">
           {rows.map(l => {
-            const img = publicImg(l.images?.[0]);
+            const img = thumbImg(l.images?.[0]);
             return (
               <div key={l.id} className="lst-card">
                 <div
@@ -149,12 +246,9 @@ export default function ListingApprovals() {
                     <i className="fa-solid fa-user"></i> {l.profiles?.first_name} {l.profiles?.last_name}
                     <span style={{ marginLeft: 8 }}>· {fmtDate(l.created_at)}</span>
                   </div>
-                  <div className="lst-actions">
-                    <button className="btn btn-secondary" disabled={busy === l.id} onClick={() => setViewing(l)}>
-                      <i className="fa-regular fa-eye"></i> View
-                    </button>
-                    <button className="btn btn-danger" disabled={busy === l.id} onClick={() => setRejecting(l)}>Reject</button>
-                    <button className="btn btn-primary" disabled={busy === l.id} onClick={() => approve(l)} style={{ flex: 1, justifyContent: 'center' }}>Approve</button>
+                  <MoaBadge l={l} />
+                  <div className="lst-actions" style={{ flexWrap: 'wrap' }}>
+                    {moaActions(l)}
                   </div>
                 </div>
               </div>
@@ -229,15 +323,29 @@ export default function ListingApprovals() {
             </div>
           </div>
 
-          <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+          <div style={{ borderTop: '1px solid var(--br)', paddingTop: 14, marginBottom: 14 }}>
+            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, color: 'var(--td)' }}>Memorandum of Agreement</div>
+            <MoaBadge l={viewing} />
+          </div>
+
+          <div className="row" style={{ justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
             <button className="btn btn-secondary" onClick={() => setViewing(null)}>Close</button>
-            <button className="btn btn-danger" disabled={busy === viewing.id} onClick={() => setRejecting(viewing)}>Reject</button>
-            <button className="btn btn-primary" disabled={busy === viewing.id} onClick={() => approve(viewing)}>Approve</button>
+            {moaActions(viewing)}
           </div>
         </div>
       </div>
     )}
     </>
+  );
+}
+
+function MoaBadge({ l }: { l: Listing }) {
+  const status = moaOf(l)?.status ?? 'pending';
+  return (
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: MOA_COLOR[status], margin: '4px 0' }}>
+      <span style={{ width: 8, height: 8, borderRadius: '50%', background: MOA_COLOR[status], display: 'inline-block' }} />
+      {MOA_LABEL[status]}
+    </div>
   );
 }
 

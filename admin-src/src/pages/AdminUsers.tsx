@@ -43,7 +43,7 @@ export default function AdminUsers() {
   }, []);
 
   async function load() {
-    setRows(null);
+    // Keep the current rows visible while the new filter loads (no spinner flash).
     let q = sb.from('profiles').select(COLS);
     q = filter === 'active'
       ? q.eq('is_approved', true)

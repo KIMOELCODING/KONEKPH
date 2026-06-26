@@ -14,6 +14,13 @@ export interface Profile {
   created_at: string;
 }
 
+export interface MoaAgreement {
+  id: string;
+  status: 'pending' | 'sent' | 'signed' | 'declined';
+  signed_pdf_path: string | null;
+  broker_signed_at: string | null;
+}
+
 export interface Listing {
   id: string;
   broker_id: string;
@@ -37,6 +44,8 @@ export interface Listing {
   rejection_reason: string | null;
   created_at: string;
   profiles?: { first_name: string; last_name: string; phone: string | null; email: string | null; license_number: string | null } | null;
+  // to-one embed of the per-listing MOA (unique on listing_id) — returned as an array by supabase-js.
+  moa_agreements?: MoaAgreement[] | null;
 }
 
 export type ArticleType = 'news' | 'announcement' | 'memorandum';

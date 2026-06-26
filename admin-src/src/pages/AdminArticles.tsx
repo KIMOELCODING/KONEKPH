@@ -108,26 +108,23 @@ export default function AdminArticles() {
 
   async function togglePublish(a: Article) {
     setBusy(a.id);
-    const { error } = await sb
-      .from('articles')
-      .update({ published_at: a.published_at ? null : new Date().toISOString() })
-      .eq('id', a.id);
+    const next = a.published_at ? null : new Date().toISOString();
+    const { error } = await sb.from('articles').update({ published_at: next }).eq('id', a.id);
     setBusy(null);
     if (error) { showToast(error.message, true); return; }
     showToast(a.published_at ? 'Unpublished.' : 'Published.');
-    load();
+    // Patch the single row instead of re-fetching the whole list.
+    setRows(rs => rs?.map(r => (r.id === a.id ? { ...r, published_at: next } : r)) ?? rs);
   }
 
   async function toggleTrending(a: Article) {
     setBusy(a.id);
-    const { error } = await sb
-      .from('articles')
-      .update({ is_trending: !a.is_trending })
-      .eq('id', a.id);
+    const next = !a.is_trending;
+    const { error } = await sb.from('articles').update({ is_trending: next }).eq('id', a.id);
     setBusy(null);
     if (error) { showToast(error.message, true); return; }
     showToast(a.is_trending ? 'Removed from Trending.' : 'Added to Trending.');
-    load();
+    setRows(rs => rs?.map(r => (r.id === a.id ? { ...r, is_trending: next } : r)) ?? rs);
   }
 
   async function remove(a: Article) {

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { sb } from '../lib/supabase';
 import type { Article, ArticleType } from '../types';
+import RichTextEditor from '../components/RichTextEditor';
 
 type FilterTab = 'all' | ArticleType;
 
@@ -249,8 +250,9 @@ function ArticleForm({ form, setForm, busy, uploading, uploadImage, save }: Arti
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  // Body is now HTML (Rich Text Editor) — strip tags before counting words.
   const wordCount = useMemo(
-    () => form.body.trim().split(/\s+/).filter(Boolean).length,
+    () => form.body.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').trim().split(/\s+/).filter(Boolean).length,
     [form.body]
   );
 
@@ -347,12 +349,9 @@ function ArticleForm({ form, setForm, busy, uploading, uploadImage, save }: Arti
 
         <div className="form-field">
           <div className="form-label">Body</div>
-          <textarea
-            className="input"
-            style={{ minHeight: 160 }}
+          <RichTextEditor
             value={form.body}
-            onChange={e => setForm({ ...form, body: e.target.value })}
-            placeholder="Write the full article body. Plain text or simple HTML."
+            onChange={html => setForm(f => (f ? { ...f, body: html } : f))}
           />
           <div className="form-counter">{wordCount} {wordCount === 1 ? 'word' : 'words'}</div>
         </div>

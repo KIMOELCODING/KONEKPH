@@ -668,3 +668,32 @@ textarea.input { resize: vertical; line-height: 1.5; }
   font-size: 14px;
   text-align: center;
 }
+
+/* Rich Text Editor (Quill "snow" theme) — themed to match .input + admin tokens */
+.rte { border-radius: 11px; }
+.rte .ql-toolbar.ql-snow {
+  border: 1.5px solid var(--br);
+  border-bottom: none;
+  border-radius: 11px 11px 0 0;
+  background: rgba(255, 255, 255, 0.7);
+}
+.rte .ql-container.ql-snow {
+  border: 1.5px solid var(--br);
+  border-radius: 0 0 11px 11px;
+  background: rgba(255, 255, 255, 0.7);
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--td);
+}
+.rte .ql-editor { min-height: 200px; line-height: 1.6; }
+.rte .ql-editor.ql-blank::before { color: var(--tl); font-style: normal; left: 14px; }
+.rte:focus-within .ql-toolbar.ql-snow,
+.rte:focus-within .ql-container.ql-snow { border-color: var(--ga); }
+.rte .ql-snow .ql-stroke { stroke: var(--tm); }
+.rte .ql-snow .ql-fill { fill: var(--tm); }
+.rte .ql-snow.ql-toolbar button:hover .ql-stroke,
+.rte .ql-snow.ql-toolbar button.ql-active .ql-stroke { stroke: var(--ga); }
+.rte .ql-snow.ql-toolbar button:hover .ql-fill,
+.rte .ql-snow.ql-toolbar button.ql-active .ql-fill { fill: var(--ga); }
+.rte .ql-snow .ql-picker-label:hover,
+.rte .ql-snow .ql-picker-label.ql-active { color: var(--ga); }

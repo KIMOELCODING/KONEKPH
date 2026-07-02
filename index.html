@@ -353,7 +353,11 @@ document.addEventListener('DOMContentLoaded', async function() {
     function showAppShell(){
       var login = document.getElementById('app-login');
       var shell = document.getElementById('app-shell');
-      if (login) login.style.display = 'none';
+      // Use !important priority: the k-auth-light stylesheet sets
+      // #app-login{display:flex !important} for the page-scroll layout, which
+      // would otherwise beat a plain inline display:none and leave the login
+      // screen covering the app after a successful login.
+      if (login) login.style.setProperty('display', 'none', 'important');
       if (shell) shell.classList.add('visible');
       if (typeof window.initCharts === 'function') { try { window.initCharts(); } catch(e){} }
       __releaseGate();

@@ -457,6 +457,9 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (!/[!@#$%^&*()_+\-=\[\]{};':"|<>?,.\/`~]/.test(pw)) return 'Password needs at least one symbol (e.g. ! @ # $ % &).';
       return null;
     }
+    // Expose the canonical policy so the shared password meter (k-pw-meter) and
+    // any other flow validate against a single source of truth.
+    window.pwPolicyError = pwPolicyError;
 
     // Show a signup error AND pull the user's attention to the offending field:
     // scroll it into view, flash a red outline, and focus it.
@@ -470,6 +473,16 @@ document.addEventListener('DOMContentLoaded', async function() {
       setTimeout(function(){ tgt.classList.remove('field-err'); }, 2500);
       try { f.focus({ preventScroll:true }); } catch(e){ try { f.focus(); } catch(_){} }
     }
+    // Exposed so the injected signup fields (k-signup-extend) and the wizard
+    // (k-signup-wizard) can surface/clear signup errors through the same helper.
+    window.__suFieldErr = suErr;
+    window.__suClearErr = function(fieldId){
+      setErr('signup-error', '');
+      var f = fieldId && document.getElementById(fieldId);
+      if (!f) return;
+      var tgt = (f.closest && f.closest('.af')) || f;
+      if (tgt) tgt.classList.remove('field-err');
+    };
 
     window.doSignup = async function(){
       var fname = (document.getElementById('su-fname')||{}).value || '';
@@ -492,7 +505,8 @@ document.addEventListener('DOMContentLoaded', async function() {
       var pwErr = pwPolicyError(pw);
       if (pwErr) { suErr(pwErr, 'su-pw'); return; }
       if (pw !== pw2) { suErr('Those passwords don’t match — please re-enter them.', 'su-pw2'); return; }
-      if (license.length < 5) { suErr('Please enter your PRC license number.', 'su-license'); return; }
+      if (!/^\d+$/.test(license)) { suErr('PRC license number must be numbers only.', 'su-license'); return; }
+      if (license.length !== 7) { suErr('PRC license number must be exactly 7 digits.', 'su-license'); return; }
       if (!idPhotoFile || !prcIdFile) { suErr('Please upload your 1×1 photo and PRC ID.', !idPhotoFile ? 'su-id-photo' : 'su-prc-id'); return; }
       if (idPhotoFile.size > MAX_UPLOAD_BYTES || prcIdFile.size > MAX_UPLOAD_BYTES) {
         suErr('Each upload must be 5 MB or smaller.', idPhotoFile.size > MAX_UPLOAD_BYTES ? 'su-id-photo' : 'su-prc-id'); return;
@@ -602,45 +616,18 @@ document.addEventListener('DOMContentLoaded', async function() {
     };
     window.__konekCancelOtp = function(){ window.__pendingSignup = null; };
 
-    // ---- Signup password-requirements hint + field-error styling --------
-    // Injects a requirements line under the password fields that ticks each
-    // rule green as the user types, plus the .field-err flash used by suErr().
+    // ---- Signup field-error styling -------------------------------------
+    // The password requirements UI now lives in the shared meter (k-pw-meter);
+    // this only injects the .field-err flash used by suErr().
     (function initSignupHints(){
       function run(){
         try {
           if (!document.getElementById('k-signup-hint-css')) {
             var st = document.createElement('style'); st.id = 'k-signup-hint-css';
             st.textContent =
-              '.su-pw-hint{font-size:.74rem;line-height:1.5;color:#fff;margin:-4px 0 12px;padding-left:4px}' +
-              '.su-pw-hint span{white-space:nowrap}' +
-              '.su-pw-hint span.ok{color:#86efac;font-weight:600}' +
-              '.su-pw-hint span.ok::before{content:"\\2713\\00a0"}' +
               '.af.field-err,input.field-err{outline:2px solid #ef4444!important;outline-offset:1px;border-radius:12px;animation:kErrShake .35s}' +
               '@keyframes kErrShake{0%,100%{transform:translateX(0)}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}';
             document.head.appendChild(st);
-          }
-          var pw  = document.getElementById('su-pw');
-          var pw2 = document.getElementById('su-pw2');
-          var wrap = pw2 && (pw2.closest ? pw2.closest('.af') : null);
-          if (wrap && wrap.parentNode && !document.getElementById('su-pw-hint')) {
-            var hint = document.createElement('div');
-            hint.id = 'su-pw-hint'; hint.className = 'su-pw-hint';
-            hint.innerHTML = 'Must include <span data-r="len">8+ characters</span>, a ' +
-              '<span data-r="lower">lowercase letter</span>, an <span data-r="upper">uppercase letter</span>, ' +
-              'a <span data-r="digit">number</span>, and a <span data-r="symbol">symbol</span> (!@#$%…).';
-            wrap.parentNode.insertBefore(hint, wrap.nextSibling);
-          }
-          if (pw && !pw.__konekHintBound) {
-            pw.__konekHintBound = true;
-            pw.addEventListener('input', function(){
-              var v = pw.value || '', h = document.getElementById('su-pw-hint'); if (!h) return;
-              function mark(k, ok){ var s = h.querySelector('[data-r="'+k+'"]'); if (s) s.classList.toggle('ok', !!ok); }
-              mark('len',    v.length >= 8);
-              mark('lower',  /[a-z]/.test(v));
-              mark('upper',  /[A-Z]/.test(v));
-              mark('digit',  /[0-9]/.test(v));
-              mark('symbol', /[!@#$%^&*()_+\-=\[\]{};':"|<>?,.\/`~]/.test(v));
-            });
           }
         } catch(e){}
       }
@@ -786,9 +773,9 @@ document.addEventListener('DOMContentLoaded', async function() {
       var s = document.createElement('style');
       s.id = 'k-signup-extend-style';
       s.textContent =
-        '.su-file-row{display:flex;flex-direction:column;gap:4px;margin:8px 0;text-align:left}' +
+        '.su-file-row{display:flex;flex-direction:column;gap:3px;margin:3px 0;text-align:left}' +
         '.su-file-row > label{font-size:12px;color:rgba(255,255,255,0.85);font-weight:500;letter-spacing:.02em}' +
-        '.su-file-row > input[type=file]{font-size:13px;color:rgba(255,255,255,0.9);padding:8px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.25);border-radius:8px;cursor:pointer}' +
+        '.su-file-row > input[type=file]{font-size:13px;color:rgba(255,255,255,0.9);padding:6px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.25);border-radius:8px;cursor:pointer}' +
         '.su-file-row > input[type=file]::file-selector-button{margin-right:10px;padding:6px 12px;border:0;border-radius:6px;background:rgba(255,255,255,0.18);color:#fff;font-size:12px;font-weight:600;cursor:pointer}' +
         '.su-tos{margin:10px 0 4px;text-align:left}' +
         '.su-tos-body{max-height:120px;overflow-y:auto;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.25);border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.5;color:rgba(255,255,255,0.9)}' +
@@ -797,10 +784,10 @@ document.addEventListener('DOMContentLoaded', async function() {
         '.su-tos-check{display:flex;gap:8px;align-items:flex-start;font-size:12px;color:rgba(255,255,255,0.9);cursor:pointer;line-height:1.4}' +
         '.su-tos-check input{margin-top:3px}' +
         '.su-tos-check input:disabled + span{opacity:.55}' +
-        '.su-sig-row{display:flex;flex-direction:column;gap:6px;margin:10px 0 4px;text-align:left}' +
+        '.su-sig-row{display:flex;flex-direction:column;gap:4px;margin:6px 0 2px;text-align:left}' +
         '.su-sig-row > label{font-size:12px;color:rgba(255,255,255,0.85);font-weight:500;letter-spacing:.02em}' +
-        '.su-sig-note{font-size:11px;color:rgba(255,255,255,0.7);line-height:1.45;margin:0 0 2px}' +
-        '.su-sig-pad{width:100%;height:150px;background:#fff;border:1px solid rgba(255,255,255,0.25);border-radius:8px;touch-action:none;cursor:crosshair;display:block}' +
+        '.su-sig-note{font-size:11px;color:rgba(255,255,255,0.7);line-height:1.4;margin:0 0 2px}' +
+        '.su-sig-pad{width:100%;height:120px;background:#fff;border:1px solid rgba(255,255,255,0.25);border-radius:8px;touch-action:none;cursor:crosshair;display:block}' +
         '.su-sig-upload{font-size:13px;color:rgba(255,255,255,0.9);padding:8px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.25);border-radius:8px;cursor:pointer;display:none}' +
         '.su-sig-upload::file-selector-button{margin-right:10px;padding:6px 12px;border:0;border-radius:6px;background:rgba(255,255,255,0.18);color:#fff;font-size:12px;font-weight:600;cursor:pointer}' +
         '.su-sig-tools{display:flex;gap:14px;align-items:center;font-size:11px}' +
@@ -852,9 +839,11 @@ document.addEventListener('DOMContentLoaded', async function() {
       var tools = document.createElement('div');
       tools.className = 'su-sig-tools';
       var clearBtn = document.createElement('button');
-      clearBtn.type = 'button'; clearBtn.className = 'su-sig-link'; clearBtn.textContent = 'Clear';
+      clearBtn.type = 'button'; clearBtn.className = 'su-sig-btn su-sig-btn-ghost';
+      clearBtn.innerHTML = '<i class="fa-solid fa-eraser"></i> Clear';
       var toggle = document.createElement('button');
-      toggle.type = 'button'; toggle.className = 'su-sig-link'; toggle.textContent = 'Upload image instead';
+      toggle.type = 'button'; toggle.className = 'su-sig-btn su-sig-btn-primary';
+      toggle.innerHTML = '<i class="fa-solid fa-arrow-up-from-bracket"></i> Upload Image';
       tools.appendChild(clearBtn); tools.appendChild(toggle);
       row.appendChild(lbl); row.appendChild(note); row.appendChild(canvas); row.appendChild(upload); row.appendChild(tools);
 
@@ -893,8 +882,10 @@ document.addEventListener('DOMContentLoaded', async function() {
         var uploadMode = upload.style.display !== 'block';
         upload.style.display = uploadMode ? 'block' : 'none';
         canvas.style.display = uploadMode ? 'none' : 'block';
-        clearBtn.style.display = uploadMode ? 'none' : 'inline';
-        toggle.textContent = uploadMode ? 'Draw signature instead' : 'Upload image instead';
+        clearBtn.style.display = uploadMode ? 'none' : '';
+        toggle.innerHTML = uploadMode
+          ? '<i class="fa-solid fa-pen"></i> Draw Signature'
+          : '<i class="fa-solid fa-arrow-up-from-bracket"></i> Upload Image';
       });
       return row;
     }
@@ -975,7 +966,26 @@ document.addEventListener('DOMContentLoaded', async function() {
         var btn = document.getElementById('btn-signup');
         if (!btn || !btn.parentNode) return;
         var parent = btn.parentNode;
-        var licenseField = buildField('fa-id-card', 'su-license', 'PRC license number');
+        var licenseField = buildField('fa-id-card', 'su-license', 'PRC license number (7 digits)');
+        // PRC license = numbers only, hard-capped at exactly 7 digits. Filter on
+        // input so an 8th digit / any letter physically can't enter the field.
+        var licInp = licenseField.querySelector('#su-license');
+        if (licInp) {
+          licInp.setAttribute('inputmode', 'numeric');
+          licInp.setAttribute('maxlength', '7');
+          licInp.setAttribute('autocomplete', 'off');
+          licInp.addEventListener('input', function(){
+            var cleaned = (licInp.value || '').replace(/\D/g, '').slice(0, 7);
+            if (cleaned !== licInp.value) licInp.value = cleaned;
+            if (typeof window.__suClearErr === 'function') window.__suClearErr('su-license');
+          });
+          licInp.addEventListener('blur', function(){
+            var v = licInp.value || '';
+            if (v && v.length !== 7 && typeof window.__suFieldErr === 'function') {
+              window.__suFieldErr('PRC license number must be exactly 7 digits.', 'su-license');
+            }
+          });
+        }
         var photoRow = buildFileRow('su-id-photo', '1x1 photo (white background)', 'image/*');
         var prcRow   = buildFileRow('su-prc-id',   'PRC ID (image or PDF)',        'image/*,application/pdf');
         var sigRow = buildSignatureRow();
@@ -8641,7 +8651,6 @@ document.addEventListener('DOMContentLoaded', async function() {
         '    <p style="margin:0 0 18px;color:var(--tm,#4a5a4a);line-height:1.5;font-size:13px;">Choose a strong password you haven\'t used before.</p>' +
         '    <input id="k-fp-pw" type="password" autocomplete="new-password" placeholder="New password" style="' + inputCss + '" />' +
         '    <input id="k-fp-pw2" type="password" autocomplete="new-password" placeholder="Confirm new password" style="' + inputCss + '" />' +
-        '    <div style="font-size:11.5px;color:var(--tm,#4a5a4a);text-align:left;margin:-2px 0 12px;line-height:1.5;">Must include 8+ characters, an uppercase &amp; lowercase letter, a number, and a symbol.</div>' +
         '    <div id="k-fp-pw-error" style="' + errCss + '"></div>' +
         '    <button id="k-fp-update" style="' + btnCss + '">Update password</button>' +
         '  </div>' +
@@ -8662,6 +8671,10 @@ document.addEventListener('DOMContentLoaded', async function() {
       var btnVerify= ov.querySelector('#k-fp-verify');
       var btnUpdate= ov.querySelector('#k-fp-update');
       var btnResend= ov.querySelector('#k-fp-resend');
+
+      // Shared password meter (helper-on-focus + segmented strength bar + eye
+      // toggle) on the new-password field — same component used by signup.
+      if (typeof window.__plPwMeter === 'function' && pwInp) { try { window.__plPwMeter(pwInp); } catch(e){} }
 
       function close(){ window.__konekRecovering = false; closeOverlay('overlay-forgot'); }
 
@@ -8748,7 +8761,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       btnUpdate.addEventListener('click', async function(){
         setErr(pwErr, '');
         var pw = pwInp.value || '', pw2 = pw2Inp.value || '';
-        var perr = pwPolicyError(pw);
+        var perr = (typeof window.pwPolicyError === 'function' ? window.pwPolicyError : pwPolicyError)(pw);
         if (perr) { setErr(pwErr, perr); return; }
         if (pw !== pw2) { setErr(pwErr, 'Those passwords don’t match — please re-enter them.'); return; }
         if (!sb()) { setErr(pwErr, 'Service unavailable. Please reload and try again.'); return; }
@@ -9420,6 +9433,407 @@ document.addEventListener('DOMContentLoaded', async function() {
       e.stopImmediatePropagation();   // suppress the mock listener on the button
       try { window.doLogin(); } catch (err) { console.error('[konek-login-fix]', err); }
     }, true);
+  })();
+  </script>
+
+  <!-- ==========================================================================
+       k-auth-light — recolors the shared auth screen (login / signup / forgot)
+       from the old dark-glass theme to a clean WHITE card on a white background.
+       Injected via JS (not a static <style>) because the bundler does
+       documentElement.replaceWith() at unpack, which would wipe an appended
+       <style>. Re-injects on konek-bundler-done + a short poll; idempotent.
+       ========================================================================== -->
+  <script id="k-auth-light">
+  (function(){
+    var CSS = [
+      /* White app background — drop the nature photo + dark green overlay. */
+      '#app-login{background:#fff !important;}',
+      '.auth-bg{background:#fff !important;}',
+      '.auth-bg-overlay{display:none !important;}',
+      /* Page-level scroll: the auth form can be taller than the viewport (signup
+         step 2). Let #app-login itself scroll, and center the card only when it
+         fits (margin:auto collapses to top-aligned + page-scroll when taller).
+         Uses dvh so mobile browser chrome does not clip the top/bottom. */
+      '#app-login{display:flex !important;flex-direction:column !important;align-items:center !important;justify-content:flex-start !important;height:100vh !important;height:100dvh !important;overflow-y:auto !important;overflow-x:hidden !important;padding:14px 16px !important;box-sizing:border-box !important;}',
+      /* Decorative background layers were clipped by the old overflow:hidden. Now
+         that #app-login scrolls, pin them to the viewport (position:fixed) so they
+         do NOT count toward scroll height — only the actual form drives scroll. */
+      '.auth-bg,.auth-bg-overlay,.auth-blob{position:fixed !important;}',
+      /* Card -> clean light card. */
+      '.auth-panel{background:#fff !important;border:1px solid var(--br,#d4dcd4) !important;box-shadow:0 12px 44px rgba(0,0,0,.10) !important;color:var(--td,#1a2b1a) !important;backdrop-filter:none !important;-webkit-backdrop-filter:none !important;max-height:none !important;overflow:visible !important;margin:auto 0 !important;flex:0 0 auto !important;padding:14px 30px !important;}',
+      '.auth-logo-block{margin-bottom:15px !important;}',
+      '.auth-title{color:var(--td,#1a2b1a) !important;}',
+      '.auth-sub{color:var(--tm,#4a5a4a) !important;margin-bottom:11px !important;}',
+      '.af{margin-bottom:10px !important;}',
+      /* Hide the redundant Sign In/Sign Up tab switcher (its white-on-dark text
+         is invisible on the white card, so it reads as a stray empty box). The
+         bottom "Don\'t have an account? Sign up free" link switches instead. */
+      '.auth-tabs{display:none !important;}',
+      '.auth-brand-name{color:var(--td,#1a2b1a) !important;}',
+      '.auth-brand-name span{color:var(--gd,#2a7a3d) !important;}',
+      /* Brand chip: green box, white letter (was translucent-white on dark). */
+      '.auth-logo-mark svg rect{fill:var(--gd,#2a7a3d) !important;stroke:none !important;}',
+      '.auth-logo-mark svg path,.auth-logo-mark svg polygon{fill:#fff !important;}',
+      /* Inputs. */
+      '.af{background:#f4f7f4 !important;border:1.5px solid var(--br,#d4dcd4) !important;backdrop-filter:none !important;}',
+      '.af:focus-within{border-color:var(--gd,#2a7a3d) !important;background:#f0f5f0 !important;box-shadow:0 0 0 3px rgba(42,122,61,.14) !important;}',
+      '.af input{color:var(--td,#1a2b1a) !important;}',
+      '.af input::placeholder{color:var(--tm,#4a5a4a) !important;opacity:.8;}',
+      '.af i{color:var(--tm,#4a5a4a) !important;}',
+      /* Links / secondary text. */
+      '.auth-forgot{color:var(--tm,#4a5a4a) !important;}',
+      '.auth-forgot:hover{color:var(--gd,#2a7a3d) !important;}',
+      '.auth-switch{color:var(--tm,#4a5a4a) !important;}',
+      '.auth-switch a{color:var(--gd,#2a7a3d) !important;}',
+      /* Error banner: keep the light-red tint, darken the text for contrast. */
+      '.auth-error{background:rgba(217,79,79,.10) !important;border-color:rgba(217,79,79,.30) !important;color:#c0392b !important;}',
+      /* Injected signup fields: were white-on-dark -> make dark-on-light. */
+      '.su-file-row > label,.su-sig-row > label{color:var(--td,#1a2b1a) !important;}',
+      '.su-sig-note{color:var(--tm,#4a5a4a) !important;text-align:justify !important;}',
+      /* Signature pad: its white border is invisible on the white card. */
+      '.su-sig-pad{border:1px solid var(--br,#d4dcd4) !important;background:#fff !important;}',
+      '.su-file-row > input[type=file],.su-sig-upload{background:#f4f7f4 !important;border:1px solid var(--br,#d4dcd4) !important;color:var(--td,#1a2b1a) !important;}',
+      '.su-file-row > input[type=file]::file-selector-button,.su-sig-upload::file-selector-button{background:var(--gd,#2a7a3d) !important;color:#fff !important;}',
+      '.su-tos-body{background:#f4f7f4 !important;border:1px solid var(--br,#d4dcd4) !important;color:var(--td,#1a2b1a) !important;}',
+      '.su-tos-hint{color:var(--tm,#4a5a4a) !important;}',
+      '.su-tos-hint.ok{color:var(--gd,#2a7a3d) !important;}',
+      '.su-tos-check{color:var(--td,#1a2b1a) !important;}',
+      '.su-tos-check input:disabled + span{opacity:.55;}',
+      /* Prominent signature Clear / Upload buttons (were faint text links). */
+      '.su-sig-tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px !important;}',
+      '.su-sig-btn{display:inline-flex;align-items:center;gap:7px;padding:9px 16px;border-radius:9px;font-size:13px;font-weight:600;font-family:inherit;cursor:pointer;border:1px solid var(--br,#d4dcd4);transition:background .15s,border-color .15s,filter .15s;text-decoration:none;}',
+      '.su-sig-btn i{font-size:12px;}',
+      '.su-sig-btn-primary{background:var(--gd,#2a7a3d);color:#fff;border-color:var(--gd,#2a7a3d);}',
+      '.su-sig-btn-primary:hover{filter:brightness(1.07);}',
+      '.su-sig-btn-ghost{background:#fff;color:var(--td,#1a2b1a);}',
+      '.su-sig-btn-ghost:hover{background:#f2f5f2;}'
+    ].join('');
+    function inject(){
+      if (document.getElementById('k-auth-light-css')) return;
+      if (!document.head) return;
+      var s = document.createElement('style'); s.id = 'k-auth-light-css';
+      s.textContent = CSS;
+      document.head.appendChild(s);
+    }
+    inject();
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', inject);
+    window.addEventListener('konek-bundler-done', inject);
+    // The bundler's documentElement.replaceWith() wipes <head> after this script
+    // runs, so re-inject for a few seconds to cover that window regardless of
+    // event timing. inject() is idempotent, so this is cheap.
+    var n = 0, iv = setInterval(function(){ n++; inject(); if (n > 60) clearInterval(iv); }, 100);
+  })();
+  </script>
+
+  <!-- ==========================================================================
+       k-pw-meter — SHARED password component reused by signup + forgot-password.
+       window.__plPwMeter(inputEl): helper-text-on-focus + segmented strength bar
+       (red→green, live) + eye show/hide toggle. window.__plPwValid(pw): boolean,
+       delegating to k-auth's canonical window.pwPolicyError (single source).
+       ========================================================================== -->
+  <script id="k-pw-meter">
+  (function(){
+    if (window.__plPwMeter) return;
+    var SYM = /[!@#$%^&*()_+\-=\[\]{};':"|<>?,.\/`~]/;
+    function injectCss(){
+      if (document.getElementById('k-pw-meter-css')) return;
+      var s = document.createElement('style'); s.id = 'k-pw-meter-css';
+      s.textContent = [
+        '.pl-pw-wrap{position:relative;width:100%;}',
+        '.pl-pw-eye{position:absolute;top:50%;right:12px;transform:translateY(-50%);background:none;border:0;color:var(--tm,#4a5a4a);cursor:pointer;font-size:15px;line-height:1;padding:4px;z-index:3;}',
+        '.pl-pw-eye:hover{color:var(--gd,#2a7a3d);}',
+        '.pl-pw-help{font-size:11.5px;line-height:1.5;color:var(--tm,#4a5a4a);margin:2px 2px 9px;text-align:left;display:none;}',
+        '.pl-pw-help.show{display:block;}',
+        '.pl-pw-meter{display:none;align-items:center;gap:6px;margin:0 2px 11px;}',
+        '.pl-pw-meter.show{display:flex;}',
+        '.pl-pw-seg{flex:1;height:6px;border-radius:4px;background:#e2e8e2;transition:background .2s;}',
+        '.pl-pw-meter.s1 .pl-pw-seg:nth-child(-n+1){background:#ef4444;}',
+        '.pl-pw-meter.s2 .pl-pw-seg:nth-child(-n+2){background:#f59e0b;}',
+        '.pl-pw-meter.s3 .pl-pw-seg:nth-child(-n+3){background:#eab308;}',
+        '.pl-pw-meter.s4 .pl-pw-seg:nth-child(-n+4){background:var(--gd,#2a7a3d);}',
+        '.pl-pw-label{flex:0 0 auto;font-size:11px;font-weight:600;white-space:nowrap;color:var(--tm,#4a5a4a);}'
+      ].join('');
+      document.head.appendChild(s);
+    }
+    function ruleCount(pw){
+      var n = 0;
+      if (pw.length >= 8) n++;
+      if (/[a-z]/.test(pw)) n++;
+      if (/[A-Z]/.test(pw)) n++;
+      if (/[0-9]/.test(pw)) n++;
+      if (SYM.test(pw)) n++;
+      return n;
+    }
+    // 0 = empty, 1 weak … 4 strong (all 5 rules).
+    function level(pw){
+      if (!pw) return 0;
+      var n = ruleCount(pw);
+      if (n <= 2) return 1;
+      if (n === 3) return 2;
+      if (n === 4) return 3;
+      return 4;
+    }
+    window.__plPwValid = function(pw){
+      pw = pw || '';
+      if (typeof window.pwPolicyError === 'function') return !window.pwPolicyError(pw);
+      return ruleCount(pw) === 5;
+    };
+    var META = [
+      {t:'', c:'var(--tm,#4a5a4a)'},
+      {t:'Weak',   c:'#ef4444'},
+      {t:'Fair',   c:'#f59e0b'},
+      {t:'Good',   c:'#b7950b'},
+      {t:'Strong', c:'var(--gd,#2a7a3d)'}
+    ];
+    window.__plPwMeter = function(input){
+      if (!input || input.__plPwBound) return;
+      input.__plPwBound = true;
+      injectCss();
+
+      // Positioning host + where help/meter get inserted. Inside a .af field
+      // (signup) we reuse the .af box; standalone (forgot) we wrap the input.
+      var af = input.closest ? input.closest('.af') : null;
+      var host, anchor;
+      if (af) {
+        host = af; anchor = af;
+        af.style.position = 'relative';
+      } else {
+        host = document.createElement('div'); host.className = 'pl-pw-wrap';
+        input.parentNode.insertBefore(host, input);
+        host.appendChild(input);
+        host.style.marginBottom = input.style.marginBottom || '';
+        input.style.marginBottom = '0';
+        anchor = host;
+      }
+
+      // Only add our own eye toggle when the field doesn't already have one. The
+      // template's login/signup password fields ship a working .eye-btn already;
+      // the custom forgot-password field does not, so we add ours there.
+      var hasEye = host.querySelector('.eye-btn, .pl-pw-eye') || host.querySelector('i.fa-eye-slash, i.fa-eye');
+      if (!hasEye) {
+        if (af) af.style.paddingRight = '44px'; else input.style.paddingRight = '40px';
+        var eye = document.createElement('button');
+        eye.type = 'button'; eye.className = 'pl-pw-eye';
+        eye.setAttribute('aria-label', 'Show password');
+        eye.innerHTML = '<i class="fa-solid fa-eye"></i>';
+        eye.addEventListener('click', function(){
+          var reveal = input.type === 'password';
+          input.type = reveal ? 'text' : 'password';
+          eye.innerHTML = reveal ? '<i class="fa-solid fa-eye-slash"></i>' : '<i class="fa-solid fa-eye"></i>';
+          eye.setAttribute('aria-label', reveal ? 'Hide password' : 'Show password');
+          try { input.focus({ preventScroll:true }); } catch(e){}
+        });
+        host.appendChild(eye);
+      }
+
+      var help = document.createElement('div');
+      help.className = 'pl-pw-help';
+      help.textContent = 'Use at least 8 characters with a mix of uppercase, lowercase, numbers, and special symbols (e.g. @ # $).';
+
+      var meter = document.createElement('div');
+      meter.className = 'pl-pw-meter';
+      for (var i = 0; i < 4; i++){ var seg = document.createElement('div'); seg.className = 'pl-pw-seg'; meter.appendChild(seg); }
+      var label = document.createElement('span'); label.className = 'pl-pw-label'; meter.appendChild(label);
+
+      anchor.parentNode.insertBefore(help, anchor.nextSibling);
+      anchor.parentNode.insertBefore(meter, help.nextSibling);
+
+      function showHelp(){ help.classList.add('show'); }
+      function render(){
+        var v = input.value || '';
+        if (!v){ meter.className = 'pl-pw-meter'; label.textContent = ''; return; }
+        var lv = level(v);
+        meter.className = 'pl-pw-meter show s' + lv;
+        label.textContent = META[lv].t;
+        label.style.color = META[lv].c;
+      }
+      // Helper text: hidden by default → shown on focus (before typing) and kept.
+      input.addEventListener('focus', showHelp);
+      input.addEventListener('input', function(){ showHelp(); render(); });
+      render(); // set initial meter state only; help stays hidden until focus
+    };
+  })();
+  </script>
+
+  <!-- ==========================================================================
+       k-signup-wizard — turns the single-page signup form (#auth-signup) into a
+       3-step wizard: [1] personal/account, [2] PRC # + ID docs + signature,
+       [3] Terms + Create Account. Continuous top progress bar + back button;
+       forward-only via Continue (after the step validates); state preserved
+       because fields are MOVED, not rebuilt. Runs after k-signup-extend injects
+       its fields, and re-arms on konek-bundler-done (bundler rebuilds the DOM).
+       ========================================================================== -->
+  <script id="k-signup-wizard">
+  (function(){
+    var MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+    var EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+    function injectCss(){
+      if (document.getElementById('k-signup-wizard-css')) return;
+      var s = document.createElement('style'); s.id = 'k-signup-wizard-css';
+      s.textContent = [
+        /* The signup field container (.auth-row) is a 2-column CSS grid; force
+           the wizard header + each step to span both columns so everything is a
+           single clean full-width column (harmless when the parent isn't a grid). */
+        '.su-wiz-header,.su-wiz-step{grid-column:1 / -1;}',
+        /* Kill the parent grid blowout on narrow phones: block layout so each
+           row is constrained to the panel width instead of the 1fr min-content
+           of the file inputs. Clamp any child that could still overflow. */
+        '.su-wiz-container{display:block !important;width:100% !important;min-width:0 !important;box-sizing:border-box !important;}',
+        '.su-wiz-step{min-width:0;box-sizing:border-box;}',
+        '.su-wiz-step > *{max-width:100% !important;box-sizing:border-box !important;}',
+        '.su-wiz-step input[type=file]{width:100% !important;max-width:100% !important;box-sizing:border-box !important;}',
+        '.su-wiz-header{display:flex;align-items:center;gap:12px;margin:4px 0 14px;}',
+        '.su-wiz-back{flex:0 0 auto;width:36px;height:36px;border-radius:10px;border:1px solid var(--br,#d4dcd4);background:#fff;color:var(--td,#1a2b1a);cursor:pointer;font-size:15px;display:none;align-items:center;justify-content:center;transition:background .15s;}',
+        '.su-wiz-back.show{display:inline-flex;}',
+        '.su-wiz-back:hover{background:#f2f5f2;}',
+        '.su-wiz-track{flex:1;height:8px;border-radius:6px;background:#e2e8e2;overflow:hidden;}',
+        '.su-wiz-fill{height:100%;width:33%;background:var(--gd,#2a7a3d);border-radius:6px;transition:width .4s ease;}',
+        '.su-wiz-step{display:none;}',
+        '.su-wiz-step.active{display:block;}',
+        '.su-wiz-continue{width:100%;background:linear-gradient(135deg,#2e7a46,#3fa85f);color:#fff;border:none;border-radius:13px;padding:13px;font-size:15px;font-weight:700;cursor:pointer;transition:filter .2s;margin-top:8px;font-family:inherit;}',
+        '.su-wiz-continue:hover{filter:brightness(1.06);}'
+      ].join('');
+      document.head.appendChild(s);
+    }
+
+    function val(id){ var e = document.getElementById(id); return (e && e.value) || ''; }
+    function fileOf(id){ var e = document.getElementById(id); return (e && e.files && e.files[0]) || null; }
+    function fErr(msg, id){ if (typeof window.__suFieldErr === 'function') window.__suFieldErr(msg, id); }
+    function fClr(id){ if (typeof window.__suClearErr === 'function') window.__suClearErr(id); }
+
+    function validStep1(){
+      var fname = val('su-fname').trim();
+      var email = val('su-email').trim();
+      var pw = val('su-pw'), pw2 = val('su-pw2');
+      if (!fname) { fErr('Please enter your first name.', 'su-fname'); return false; }
+      if (!email) { fErr('Please enter your email address.', 'su-email'); return false; }
+      if (!EMAIL_RE.test(email)) { fErr('Please enter a valid email address.', 'su-email'); return false; }
+      if (!pw) { fErr('Please choose a password.', 'su-pw'); return false; }
+      if (!(window.__plPwValid && window.__plPwValid(pw))) {
+        var m = (typeof window.pwPolicyError === 'function' && window.pwPolicyError(pw)) || 'Password does not meet the requirements.';
+        fErr(m, 'su-pw'); return false;
+      }
+      if (pw !== pw2) { fErr('Those passwords don’t match — please re-enter them.', 'su-pw2'); return false; }
+      fClr('su-pw'); return true;
+    }
+
+    async function validStep2(){
+      var lic = val('su-license').trim();
+      if (!/^\d+$/.test(lic)) { fErr('PRC license number must be numbers only.', 'su-license'); return false; }
+      if (lic.length !== 7) { fErr('PRC license number must be exactly 7 digits.', 'su-license'); return false; }
+      var photo = fileOf('su-id-photo'), prc = fileOf('su-prc-id');
+      if (!photo || !prc) { fErr('Please upload your 1×1 photo and PRC ID.', !photo ? 'su-id-photo' : 'su-prc-id'); return false; }
+      if (photo.size > MAX_UPLOAD_BYTES || prc.size > MAX_UPLOAD_BYTES) {
+        fErr('Each upload must be 5 MB or smaller.', photo.size > MAX_UPLOAD_BYTES ? 'su-id-photo' : 'su-prc-id'); return false;
+      }
+      var sig = null;
+      try { sig = window.__konekSignatureBlob ? await window.__konekSignatureBlob() : null; } catch(e){}
+      if (!sig) { fErr('Please provide your e-signature — draw it or upload an image.', 'su-sig-pad'); return false; }
+      return true;
+    }
+
+    function wizardize(){
+      var panel = document.getElementById('auth-signup');
+      var btn = document.getElementById('btn-signup');
+      var tos = document.querySelector('#auth-signup .su-tos');
+      if (!panel || !btn || !tos) return false;            // fields not injected yet
+      if (panel.querySelector('#su-wiz-header')) return true; // already wizardized
+
+      function af(id){ var e = document.getElementById(id); return e && e.closest ? e.closest('.af') : null; }
+      function fileRow(id){ var e = document.getElementById(id); return e && e.closest ? e.closest('.su-file-row') : null; }
+      var sigRow = panel.querySelector('.su-sig-row');
+      var s1 = [af('su-fname'), af('su-lname'), af('su-email'), af('su-phone'), af('su-pw'), af('su-pw2')];
+      var s2 = [af('su-license'), fileRow('su-id-photo'), fileRow('su-prc-id'), sigRow];
+      var s3 = [tos, btn];
+      if (s1.indexOf(null) !== -1 || s2.indexOf(null) !== -1) return false; // incomplete DOM
+
+      injectCss();
+
+      // Insert the wizard where the fields actually live — the .af rows may sit
+      // in an inner <form>/container, not directly under #auth-signup.
+      var anchor = s1[0];
+      var container = anchor.parentNode;
+      if (!container) return false;
+      // The template parent may be a 2-col grid (.auth-row); its 1fr tracks
+      // expand to the file inputs' min-content and blow the whole step wider
+      // than the panel on narrow phones. Force block layout — every wizard row
+      // spans full width anyway, so the grid buys us nothing here.
+      container.classList.add('su-wiz-container');
+      var header = document.createElement('div');
+      header.className = 'su-wiz-header'; header.id = 'su-wiz-header';
+      header.innerHTML =
+        '<button type="button" class="su-wiz-back" id="su-wiz-back" aria-label="Back"><i class="fa-solid fa-arrow-left"></i></button>' +
+        '<div class="su-wiz-track"><div class="su-wiz-fill" id="su-wiz-fill"></div></div>';
+
+      var step1 = document.createElement('div'); step1.className = 'su-wiz-step active';
+      var step2 = document.createElement('div'); step2.className = 'su-wiz-step';
+      var step3 = document.createElement('div'); step3.className = 'su-wiz-step';
+
+      container.insertBefore(header, anchor);
+      container.insertBefore(step1, anchor);
+      container.insertBefore(step2, anchor);
+      container.insertBefore(step3, anchor);
+
+      s1.forEach(function(n){ step1.appendChild(n); });
+      s2.forEach(function(n){ step2.appendChild(n); });
+      s3.forEach(function(n){ step3.appendChild(n); });
+
+      var cont1 = document.createElement('button');
+      cont1.type = 'button'; cont1.className = 'su-wiz-continue'; cont1.textContent = 'Continue';
+      step1.appendChild(cont1);
+      var cont2 = document.createElement('button');
+      cont2.type = 'button'; cont2.className = 'su-wiz-continue'; cont2.textContent = 'Continue';
+      step2.appendChild(cont2);
+
+      // Shared password meter on the account password field.
+      if (typeof window.__plPwMeter === 'function') { try { window.__plPwMeter(document.getElementById('su-pw')); } catch(e){} }
+
+      // Gate Create Account on the ToS checkbox (which itself only enables after
+      // the user scrolls the terms to the end).
+      var tosCb = document.getElementById('su-tos');
+      if (tosCb) {
+        btn.disabled = !tosCb.checked;
+        tosCb.addEventListener('change', function(){ btn.disabled = !tosCb.checked; });
+      }
+
+      var fill = header.querySelector('#su-wiz-fill');
+      var back = header.querySelector('#su-wiz-back');
+      var steps = [step1, step2, step3];
+      var cur = 1;
+      function show(n){
+        cur = n;
+        steps.forEach(function(s, i){ s.classList.toggle('active', i === (n - 1)); });
+        fill.style.width = (n === 1 ? 33 : n === 2 ? 66 : 100) + '%';
+        back.classList.toggle('show', n > 1);
+        // Page scrolls (not the card); land at the top of each step so the
+        // logo/title/back+progress row is always visible after navigating.
+        try { var lg = document.getElementById('app-login'); if (lg) lg.scrollTop = 0; } catch(e){}
+        try { window.scrollTo(0, 0); } catch(e){}
+      }
+      cont1.addEventListener('click', function(){ if (validStep1()) show(2); });
+      cont2.addEventListener('click', async function(){
+        cont2.disabled = true;
+        var ok = false;
+        try { ok = await validStep2(); } catch(e){}
+        cont2.disabled = false;
+        if (ok) show(3);
+      });
+      back.addEventListener('click', function(){ if (cur > 1) show(cur - 1); });
+      show(1);
+      return true;
+    }
+
+    function start(){
+      var n = 0;
+      var iv = setInterval(function(){
+        n++;
+        if (wizardize() || n > 400) clearInterval(iv);  // ~20s ceiling
+      }, 50);
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+    else start();
+    window.addEventListener('konek-bundler-done', start);
   })();
   </script>
 </body>

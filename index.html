@@ -1278,7 +1278,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             // fetched so the Monthly/Quarterly toggle switches without a refetch.
             // Shape: VISITS_STATS[period][listing_id]['<year>-<periodNo>'] = count
             // (periodNo = month 1-12 for monthly, quarter 1-4 for quarterly).
-            window.VISITS_STATS = { monthly: {}, quarterly: {} };
+            window.VISITS_STATS = { weekly: {}, monthly: {}, quarterly: {}, yearly: {} };
             window.INQUIRIES_TIMESERIES = {};
 
             if (uid && topIds.length) {
@@ -1288,10 +1288,13 @@ document.addEventListener('DOMContentLoaded', async function() {
                 window.sb.from('saved_listings').select('listing_id,created_at').in('listing_id', topIds),
                 window.sb.rpc('listing_visit_stats', { p_listing_ids: topIds, p_bucket: 'month' }),
                 window.sb.rpc('listing_visit_stats', { p_listing_ids: topIds, p_bucket: 'quarter' }),
-                window.sb.from('messages').select('conversation_id,attachment_listing_id,created_at,sender_id').in('attachment_listing_id', topIds).neq('sender_id', uid)
+                window.sb.from('messages').select('conversation_id,attachment_listing_id,created_at,sender_id').in('attachment_listing_id', topIds).neq('sender_id', uid),
+                window.sb.rpc('listing_visit_stats', { p_listing_ids: topIds, p_bucket: 'week' }),
+                window.sb.rpc('listing_visit_stats', { p_listing_ids: topIds, p_bucket: 'year' })
               ]).catch(function(e){ console.warn('[konek-data] analytics batch threw', e); return []; });
               var savesR = ana[0] || { data: [] }, monthR = ana[1] || { data: [] },
-                  quartR = ana[2] || { data: [] }, inqR = ana[3] || { data: [] };
+                  quartR = ana[2] || { data: [] }, inqR = ana[3] || { data: [] },
+                  weekR  = ana[4] || { data: [] }, yearR  = ana[5] || { data: [] };
 
               if (savesR.error) console.warn('[konek-data] saved_listings', savesR.error);
               (savesR.data || []).forEach(function(r){
@@ -1299,7 +1302,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 arr.push(new Date(r.created_at));
               });
 
-              [['monthly', monthR], ['quarterly', quartR]].forEach(function(pair){
+              [['weekly', weekR], ['monthly', monthR], ['quarterly', quartR], ['yearly', yearR]].forEach(function(pair){
                 var key = pair[0], res = pair[1];
                 if (res.error){ console.warn('[konek-data] listing_visit_stats ' + key, res.error); return; }
                 (res.data || []).forEach(function(r){
@@ -4186,10 +4189,36 @@ document.addEventListener('DOMContentLoaded', async function() {
       return counts;
     }
 
-    // Period buckets: 6 months ('monthly') or the last 4 quarters ('quarterly').
+    // ISO-8601 week + week-numbering year for a local Date. Matches Postgres
+    // extract(isoyear)/extract(week) so weekly Visits keys line up with the
+    // '<isoyear>-<week>' keys the RPC returns. (Mon-based; the Thursday of a
+    // week decides which ISO year it belongs to.)
+    function isoWeek(date){
+      var d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+      var day = d.getUTCDay() || 7;             // Mon=1 … Sun=7
+      d.setUTCDate(d.getUTCDate() + 4 - day);   // shift to Thursday of this week
+      var isoyr = d.getUTCFullYear();
+      var yearStart = new Date(Date.UTC(isoyr, 0, 1));
+      var week = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+      return { isoyr: isoyr, week: week };
+    }
+
+    // Period buckets: last 6 ISO weeks ('weekly'), 6 months ('monthly'),
+    // 4 quarters ('quarterly'), or 4 years ('yearly').
     function periodBuckets(period){
       var out = [], t = new Date();
-      if (period === 'quarterly'){
+      if (period === 'weekly'){
+        for (var w = 5; w >= 0; w--){
+          var wd = new Date(t.getFullYear(), t.getMonth(), t.getDate() - w * 7);
+          var iw = isoWeek(wd);
+          out.push({ isoyr: iw.isoyr, week: iw.week, label: 'W' + iw.week });
+        }
+      } else if (period === 'yearly'){
+        for (var yy = 3; yy >= 0; yy--){
+          var yr = t.getFullYear() - yy;
+          out.push({ y: yr, label: String(yr) });
+        }
+      } else if (period === 'quarterly'){
         var absQ = t.getFullYear() * 4 + Math.floor(t.getMonth() / 3);
         for (var i = 3; i >= 0; i--){
           var a = absQ - i, y = Math.floor(a / 4), q = ((a % 4) + 4) % 4;
@@ -4206,52 +4235,58 @@ document.addEventListener('DOMContentLoaded', async function() {
     function bucketDates(dates, buckets, period){
       var counts = buckets.map(function(){ return 0; });
       (dates || []).forEach(function(d){
+        var iw = (period === 'weekly') ? isoWeek(d) : null;
         for (var i = 0; i < buckets.length; i++){
           var b = buckets[i];
           if (period === 'quarterly'){
             if (d.getFullYear() === b.y && Math.floor(d.getMonth() / 3) === b.q){ counts[i]++; break; }
+          } else if (period === 'weekly'){
+            if (iw.isoyr === b.isoyr && iw.week === b.week){ counts[i]++; break; }
+          } else if (period === 'yearly'){
+            if (d.getFullYear() === b.y){ counts[i]++; break; }
           } else if (d.getFullYear() === b.y && d.getMonth() === b.m){ counts[i]++; break; }
         }
       });
       return counts;
     }
-    // Inject a working Monthly/Quarterly toggle once, and hide the legacy mock
-    // dropdown (its visible text is exactly a period word). Idempotent.
+    // Inject the SINGLE time-period dropdown once (Weekly/Monthly/Quarterly/
+    // Yearly), and hide the legacy mock control (its visible text is exactly a
+    // period word). Replaces the old two-button Monthly/Quarterly pill so
+    // exactly one time filter is visible. Idempotent.
     function setupPeriodToggle(){
       var tabsRow = document.querySelector('#page-dashboard .ac-tabs');
       if (!tabsRow || document.getElementById('k-ac-period')) return;
       var scope = tabsRow.parentElement || tabsRow;
       try {
         Array.prototype.slice.call(scope.querySelectorAll('*')).filter(function(el){
-          return el.children.length === 0 && /^(Quarterly|Monthly|Yearly|This Quarter|This Month)$/i.test((el.textContent || '').trim());
+          return el.children.length === 0 && /^(Weekly|Quarterly|Monthly|Yearly|This Quarter|This Month)$/i.test((el.textContent || '').trim());
         }).forEach(function(leaf){
           var node = leaf;
           while (node.parentElement && node.parentElement !== scope &&
-                 /^(Quarterly|Monthly|Yearly|This Quarter|This Month)\b/i.test((node.parentElement.textContent || '').trim())){
+                 /^(Weekly|Quarterly|Monthly|Yearly|This Quarter|This Month)\b/i.test((node.parentElement.textContent || '').trim())){
             node = node.parentElement;
           }
           node.style.display = 'none';
         });
       } catch(e){}
-      var wrap = document.createElement('div');
-      wrap.id = 'k-ac-period';
-      wrap.style.cssText = 'display:flex;gap:4px;width:-moz-fit-content;width:fit-content;margin:0 0 10px auto;background:rgba(255,255,255,.6);border:1px solid var(--br,rgba(0,0,0,.08));border-radius:999px;padding:3px;';
-      [['monthly','Monthly'],['quarterly','Quarterly']].forEach(function(opt){
-        var b = document.createElement('button');
-        b.type = 'button'; b.textContent = opt[1]; b.setAttribute('data-p', opt[0]);
-        b.style.cssText = 'border:0;background:transparent;cursor:pointer;font:600 12px Inter,sans-serif;color:var(--tm,#5b6b60);padding:5px 12px;border-radius:999px;';
-        b.onclick = function(){ AC_PERIOD = opt[0]; renderAnalytics(); };
-        wrap.appendChild(b);
+      var sel = document.createElement('select');
+      sel.id = 'k-ac-period';
+      sel.className = 'k-ac-period';
+      sel.setAttribute('aria-label', 'Analytics time period');
+      // height:40px per spec; native select keeps the OS arrow + full a11y.
+      sel.style.cssText = 'height:40px;margin:0 0 10px auto;display:block;padding:4px 12px;border:1px solid var(--br);border-radius:12px;background:rgba(255,255,255,.72);color:var(--td);font:600 13px Inter,sans-serif;cursor:pointer;';
+      [['weekly','Weekly'],['monthly','Monthly'],['quarterly','Quarterly'],['yearly','Yearly']].forEach(function(opt){
+        var o = document.createElement('option');
+        o.value = opt[0]; o.textContent = opt[1];
+        sel.appendChild(o);
       });
-      scope.insertBefore(wrap, tabsRow);
+      sel.value = AC_PERIOD;
+      sel.onchange = function(){ AC_PERIOD = sel.value; renderAnalytics(); };
+      scope.insertBefore(sel, tabsRow);
     }
     function syncPeriodToggle(){
-      var wrap = document.getElementById('k-ac-period'); if (!wrap) return;
-      Array.prototype.slice.call(wrap.children).forEach(function(b){
-        var on = b.getAttribute('data-p') === AC_PERIOD;
-        b.style.background = on ? 'var(--gd,#1a4229)' : 'transparent';
-        b.style.color = on ? '#fff' : 'var(--tm,#5b6b60)';
-      });
+      var sel = document.getElementById('k-ac-period'); if (!sel) return;
+      if (sel.value !== AC_PERIOD) sel.value = AC_PERIOD;
     }
 
     // The baked-in analytics card ships 3 KPI cards (Total Visits / Inquiries /
@@ -4312,7 +4347,11 @@ document.addEventListener('DOMContentLoaded', async function() {
         // stay event-based (already unique: 1 conversation / 1 saved row).
         var vStats = (window.VISITS_STATS && window.VISITS_STATS[AC_PERIOD] && window.VISITS_STATS[AC_PERIOD][selected.id]) || {};
         visitsArr = buckets.map(function(b){
-          var key = (AC_PERIOD === 'quarterly') ? (b.y + '-' + (b.q + 1)) : (b.y + '-' + (b.m + 1));
+          var key;
+          if (AC_PERIOD === 'quarterly')   key = b.y + '-' + (b.q + 1);
+          else if (AC_PERIOD === 'weekly') key = b.isoyr + '-' + b.week;   // matches RPC '<isoyear>-<week>'
+          else if (AC_PERIOD === 'yearly') key = b.y + '-1';               // year bucket → period_no = 1
+          else                             key = b.y + '-' + (b.m + 1);
           return vStats[key] || 0;
         });
         inqArr    = bucketDates(iDates, buckets, AC_PERIOD);
@@ -4351,12 +4390,44 @@ document.addEventListener('DOMContentLoaded', async function() {
       syncPeriodToggle();
     }
 
+    // Make the whole Recent Listings card act as "My Listings" — click / Enter /
+    // Space navigate to the Your Listings page. Clicks that land on the card's
+    // own interactive children (tab filter, listing rows, View All link) are
+    // left alone so those keep working. Focusable + visible focus ring (CSS).
+    function wireRecentListingsCard(){
+      var pages = document.getElementById('rl-pages');
+      var card = pages && pages.closest ? pages.closest('.card') : null;
+      if (!card || card.__konekMyListings) return;
+      card.__konekMyListings = true;
+      card.classList.add('k-mylistings-card');
+      card.setAttribute('role', 'button');
+      card.setAttribute('tabindex', '0');
+      card.setAttribute('aria-label', 'Open My Listings');
+      var fromChildControl = function(t){
+        return t && t.closest && t.closest('.rl-tabs, .rl-tab, .rl-item, .view-all, a, button, input, select, textarea');
+      };
+      var go = function(){ if (typeof window.goTo === 'function') window.goTo('your-listings'); };
+      card.addEventListener('click', function(e){
+        if (fromChildControl(e.target)) return;
+        go();
+      });
+      card.addEventListener('keydown', function(e){
+        if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar'){
+          // Let child controls handle their own Enter/Space (e.g. a focused tab).
+          if (e.target !== card && fromChildControl(e.target)) return;
+          e.preventDefault();
+          go();
+        }
+      });
+    }
+
     function renderDashboard(){
       try { renderStats();         } catch(e){ console.warn('[k-dashboard] stats',    e); }
       try { renderPostingStatus(); } catch(e){ console.warn('[k-dashboard] posting',  e); }
       try { renderRecentListings();} catch(e){ console.warn('[k-dashboard] recent',   e); }
       try { renderTodayFocus();    } catch(e){ console.warn('[k-dashboard] focus',    e); }
       try { renderAnalytics();     } catch(e){ console.warn('[k-dashboard] analytics',e); }
+      try { wireRecentListingsCard(); } catch(e){ console.warn('[k-dashboard] mylistings', e); }
     }
 
     function hookInitCharts(){
@@ -10459,6 +10530,83 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
     window.addEventListener('konek-bundler-done', boot);
     var n = 0, iv = setInterval(function(){ n++; boot(); if (n > 60) clearInterval(iv); }, 100);
+  })();
+  </script>
+
+  <!-- ==========================================================================
+       k-dash-enhance — dashboard visual pass: compact header, right-aligned
+       chart legend, rebalanced g3 grid (wider Analytics / narrower Recent
+       Listings / taller Today's Focus), 24px spacing scale, token-consistent
+       typography, 40px period dropdown, and the clickable "My Listings"
+       (Recent Listings) card hover/focus styles. CSS is injected into <head>
+       and re-asserted on konek-bundler-done (the bundler wipes appended
+       <style> tags). Scoped under #page-dashboard so nothing else shifts.
+       ========================================================================== -->
+  <script id="k-dash-enhance">
+  (function(){
+    var CSS = [
+      /* ── Header: compact (flagged deviation from the spec's 180–220px to
+            preserve the one-screen, no-scroll dashboard). L/R padding 32px,
+            12px date→welcome gap, vertical centering, dominant welcome — exact. */
+      '#page-dashboard .dash-hero{align-items:center;padding:16px 32px;min-height:96px;}',
+      '#page-dashboard .dash-hero > div{display:flex;flex-direction:column;gap:12px;}',
+      '#page-dashboard .dash-hero h1{font-size:30px;line-height:1.08;}',
+      '#page-dashboard .dash-hero-date{font-size:12px;}',
+      /* ── Content width ~95% of the available area ── */
+      '#page-dashboard .dash-scroll{padding:14px 2.5% 12px;}',
+      /* ── 8px spacing scale: 24px gaps between cards ── */
+      '#page-dashboard .stats{gap:24px;}',
+      '#page-dashboard .g3{grid-template-columns:1.9fr 1fr 0.9fr;gap:24px;}',
+      /* let the fr ratios actually apply (content min-width was inflating the
+         narrow columns, so Recent Listings never shrank) */
+      '#page-dashboard .g3 > *{min-width:0;}',
+      '#page-dashboard .g3 > .col-scroll:nth-child(2){gap:24px;}',
+      /* col2 stack: Posting Status stays content-sized, Today\'s Focus grows to
+         fill the column (increases its height and balances the pair). */
+      '#page-dashboard .g3 > .col-scroll:nth-child(2) > .card:nth-child(1){flex:0 0 auto;}',
+      '#page-dashboard .g3 > .col-scroll:nth-child(2) > .card:nth-child(2){flex:1 1 auto;min-height:0;}',
+      /* ── Cards / design tokens (padding 20px, radius 16px) ── */
+      '#page-dashboard .card{padding:20px;border-radius:16px;}',
+      /* Section titles: 18px — closest consistent value; the spec\'s 20–24px
+         overflows the dense stacked cards (flagged). */
+      '#page-dashboard .card-t{font-size:18px;}',
+      '#page-dashboard .tf-t{font-size:18px;}',
+      /* Primary metric numbers: 32px (spec 32–40) ── */
+      '#page-dashboard .sc-val{font-size:32px;line-height:1.05;}',
+      /* ── Chart legend: right-aligned, 8px dot→label, 24px between items ── */
+      '#page-dashboard .ac-legend{justify-content:flex-end;gap:24px;}',
+      '#page-dashboard .leg-i{gap:8px;}',
+      /* ── Single time-period dropdown: 40px tall. Hide the legacy mock
+            "Quarterly ▾" pill so exactly ONE time filter is visible (its <i>
+            child defeats the JS leaf-text matcher, so hide it here). ── */
+      '#page-dashboard select.k-ac-period{height:40px;}',
+      '#page-dashboard .ac-period{display:none;}',
+      /* ── Clickable "My Listings" card (Recent Listings): pointer, 200ms ease,
+            scale 1.02 + ~4px elevation shadow on hover, visible focus ring ── */
+      '#page-dashboard .k-mylistings-card{cursor:pointer;transition:transform 200ms ease, box-shadow 200ms ease;}',
+      '#page-dashboard .k-mylistings-card:hover{transform:scale(1.02);box-shadow:0 4px 16px rgba(10,30,18,.16);}',
+      '#page-dashboard .k-mylistings-card:focus-visible{outline:2px solid var(--gd);outline-offset:2px;}',
+      '#page-dashboard .g3 > .col-scroll:nth-child(3){overflow:visible;}',
+      /* ── Responsive: tablet & mobile ── */
+      '@media (max-width:820px){',
+      '  #page-dashboard .g3{grid-template-columns:1fr !important;gap:24px !important;}',
+      '  #page-dashboard .dash-hero{padding:16px 18px;min-height:auto;}',
+      '  #page-dashboard .dash-scroll{padding:14px 18px 12px;}',
+      '  #page-dashboard .sc-val{font-size:28px;}',
+      '}'
+    ].join('');
+    function inject(){
+      if (document.getElementById('k-dash-enhance-css')) return;
+      if (!document.head) return;
+      var s = document.createElement('style');
+      s.id = 'k-dash-enhance-css';
+      s.textContent = CSS;
+      document.head.appendChild(s);
+    }
+    inject();
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', inject);
+    window.addEventListener('konek-bundler-done', inject);
+    var n = 0, iv = setInterval(function(){ n++; inject(); if (n > 60) clearInterval(iv); }, 100);
   })();
   </script>
 </body>

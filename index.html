@@ -284,6 +284,55 @@ document.addEventListener('DOMContentLoaded', async function() {
   })();
   </script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <!-- DOMPurify — sanitizes admin-authored article HTML before it hits the
+       #art-body innerHTML sink (see k-article-sanitize). CDN, like supabase-js. -->
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
+  <script id="k-article-sanitize">
+  (function(){
+    // Allow exactly the formatting the admin Rich Text Editor can produce:
+    // headings, bold/italic/underline/strike, links, bullet + numbered lists,
+    // blockquotes, and inline text-align via style. Everything else (scripts,
+    // event handlers, iframes, unsafe URLs) is dropped by DOMPurify.
+    var ALLOWED_TAGS = ['p','br','h1','h2','h3','h4','h5','h6','strong','b','em','i','u','s','strike','a','ul','ol','li','blockquote','span','div','hr'];
+    var ALLOWED_ATTR = ['href','target','rel','style','class'];
+    var hookAdded = false;
+    function ensureHook(){
+      if (hookAdded || !window.DOMPurify || !window.DOMPurify.addHook) return;
+      hookAdded = true;
+      // Harden links: DOMPurify already strips javascript:/data: hrefs; we also
+      // force new-tab open with no referrer/opener leakage on every anchor.
+      window.DOMPurify.addHook('afterSanitizeAttributes', function(node){
+        if (node.tagName === 'A'){
+          node.setAttribute('target','_blank');
+          node.setAttribute('rel','noopener noreferrer nofollow');
+        }
+      });
+    }
+    // Turn a stored articles.body value into safe, render-ready HTML. Plain-text
+    // bodies (no '<') keep the legacy paragraph-splitting behavior; HTML bodies
+    // are sanitized. Shared by k-home-render + k-phase2-ui so both innerHTML
+    // sinks are protected by one implementation.
+    window.__plArticleBodyHtml = function(bodyHtml){
+      var s = String(bodyHtml == null ? '' : bodyHtml);
+      var isHtml = s.indexOf('<') >= 0;
+      var html = isHtml ? s : s.split(/\n{2,}/).map(function(p){
+        return '<p>' + p.replace(/</g,'&lt;').replace(/\n/g,'<br>') + '</p>';
+      }).join('');
+      if (window.DOMPurify && window.DOMPurify.sanitize){
+        ensureHook();
+        return window.DOMPurify.sanitize(html, {
+          ALLOWED_TAGS: ALLOWED_TAGS, ALLOWED_ATTR: ALLOWED_ATTR, ALLOW_DATA_ATTR: false
+        });
+      }
+      // DOMPurify unavailable (CDN blocked) → fail safe: degrade an HTML body to
+      // escaped text rather than injecting untrusted markup. Plain text already escaped.
+      if (isHtml){
+        return '<p>' + s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</p>';
+      }
+      return html;
+    };
+  })();
+  </script>
   <script id="k-auth">
   (function(){
     if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY || !window.supabase) {
@@ -1700,14 +1749,12 @@ document.addEventListener('DOMContentLoaded', async function() {
           try {
             var el = document.getElementById('art-body');
             if (el) {
-              // Treat admin body as plain text with paragraph breaks. If they
-              // want HTML they can include tags — preserve them.
-              var html = String(bodyHtml).indexOf('<') >= 0
-                ? bodyHtml
-                : String(bodyHtml).split(/\n{2,}/).map(function(p){
-                    return '<p>' + p.replace(/</g,'&lt;').replace(/\n/g,'<br>') + '</p>';
-                  }).join('');
-              el.innerHTML = html;
+              // Sanitize before writing to the innerHTML sink. The shared helper
+              // (k-article-sanitize) runs DOMPurify over HTML bodies from the
+              // admin Rich Text Editor and preserves the legacy plain-text path.
+              el.innerHTML = window.__plArticleBodyHtml
+                ? window.__plArticleBodyHtml(bodyHtml)
+                : String(bodyHtml).replace(/</g,'&lt;');
             }
           } catch(e){ console.warn('[konek-home] openArticle body', e); }
         }
@@ -4719,7 +4766,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       window.SAVED_IDS = window.SAVED_IDS || new Set();
       var was = window.SAVED_IDS.has(id);
       if (was) window.SAVED_IDS.delete(id); else window.SAVED_IDS.add(id);
-      renderListings(); renderBookmarks();
+      renderListings(); renderBookmarks(); syncDetailSaveBtn();
       var pq = was
         ? window.sb.from('saved_listings').delete().eq('user_id', uid).eq('listing_id', id)
         : window.sb.from('saved_listings').insert({ user_id: uid, listing_id: id });
@@ -4727,7 +4774,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (res && res.error){
           console.warn('[k-listings] save toggle failed', res.error);
           if (was) window.SAVED_IDS.add(id); else window.SAVED_IDS.delete(id);
-          renderListings(); renderBookmarks();
+          renderListings(); renderBookmarks(); syncDetailSaveBtn();
           return;
         }
         // Saves OF the broker's own listings feed the dashboard analytics
@@ -4736,6 +4783,73 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (window.__konekLoadData) window.__konekLoadData({ force: true });
       });
     }
+    // ---------- listing-detail Save button sync (Phase 3 #2) ----------
+    // The template ships #ldsh-save-btn with an inline onclick="toggleLDSHSave(this)"
+    // that ONLY flips the icon locally — it never persists to saved_listings and is
+    // unaware of SAVED_IDS, so reopening a saved listing showed the button back in
+    // its unsaved look. We (a) reflect the TRUE saved state whenever a detail opens
+    // and after any toggle, and (b) route the button's click through the real
+    // toggleSave() so it persists and stays consistent with the cards/bookmarks.
+    // The underlying save behavior (toggleSave + saved_listings) is unchanged.
+    function syncDetailSaveBtn(id){
+      var btn = document.getElementById('ldsh-save-btn');
+      if (!btn) return;
+      if (id == null) id = window.__konekLastListingId;
+      var saved = !!(id != null && (window.SAVED_IDS || new Set()).has(id));
+      var icon = btn.querySelector('i');
+      if (icon){
+        icon.className = 'fa-' + (saved ? 'solid' : 'regular') + ' fa-bookmark';
+        icon.style.color = saved ? '#c8890a' : '';
+      }
+      // Update the trailing label text node ("Save" ⇄ "Saved").
+      var setText = false;
+      for (var n = btn.firstChild; n; n = n.nextSibling){
+        if (n.nodeType === 3 && n.nodeValue.trim()){ n.nodeValue = saved ? ' Saved' : ' Save'; setText = true; }
+      }
+      if (!setText) btn.appendChild(document.createTextNode(saved ? ' Saved' : ' Save'));
+      // Gold fill when saved — same accent (#c8890a) the card bookmark uses, so the
+      // saved state reads consistently across cards, bookmarks, and detail.
+      btn.style.color       = saved ? '#c8890a' : '';
+      btn.style.borderColor = saved ? 'rgba(200,137,10,.45)' : '';
+      btn.style.background  = saved ? 'rgba(200,137,10,.10)' : '';
+      btn.setAttribute('aria-pressed', saved ? 'true' : 'false');
+    }
+    // Real click handler for the detail Save button. Installed as
+    // window.toggleLDSHSave inside installOverrides() (which re-runs on
+    // konek-bundler-done), so the template's mock toggleLDSHSave — redefined when
+    // the bundle unpacks after this script — can't clobber it.
+    function detailSaveClick(){
+      var id = window.__konekLastListingId;
+      if (id == null) return;
+      toggleSave(id);        // persists + updates SAVED_IDS + re-renders cards/bookmarks
+      syncDetailSaveBtn(id); // reflect immediately on the detail button
+    }
+
+    // Wire the template's Report button (the one in .ld-sh-actions next to Save,
+    // which shipped with no onclick) to the existing report modal (k-report →
+    // window.__konekOpenReport). Idempotent; the bundler recreates this button on
+    // unpack, so we re-wire on each detail open (populateDetail).
+    function wireDetailReportBtn(){
+      var actions = document.querySelector('#page-listing-detail .ld-sh-actions');
+      if (!actions) return;
+      var btns = actions.querySelectorAll('.ld-sh-action-btn');
+      for (var i = 0; i < btns.length; i++){
+        var b = btns[i];
+        if (b.id === 'ldsh-save-btn') continue;
+        if (!(b.querySelector('.fa-flag') || /report/i.test(b.textContent || ''))) continue;
+        if (b.__plReportWired) continue;
+        b.__plReportWired = true;
+        b.style.cursor = 'pointer';
+        // Strip any template inline handler, then route to the real modal.
+        b.onclick = null;
+        b.addEventListener('click', function(ev){
+          if (ev) ev.preventDefault();
+          var lid = window.__konekLastListingId;
+          if (lid && window.__konekOpenReport) window.__konekOpenReport(lid);
+        });
+      }
+    }
+
     function confirmUnsave(id){
       pendingUnsaveId = id;
       if (window.showModal) window.showModal('overlay-unsave-confirm');
@@ -4818,7 +4932,19 @@ document.addEventListener('DOMContentLoaded', async function() {
         locEl.innerHTML = '<i class="fa-solid fa-location-dot" style="color:var(--gd);"></i> ';
         locEl.appendChild(document.createTextNode(loc || ''));
       }
-      setId('ldsh-desc', row.description || 'No description provided.');
+      // Phase 2 (#3): render the description as real paragraphs so broker-entered
+      // line breaks become spaced <p> blocks (readability). Split on blank lines
+      // first; fall back to single newlines. No breaks → one paragraph.
+      (function(){
+        var descEl = document.getElementById('ldsh-desc');
+        if (!descEl) return;
+        var txt = row.description || 'No description provided.';
+        var parts = String(txt).split(/\n{2,}/).map(function(s){ return s.trim(); }).filter(Boolean);
+        if (parts.length <= 1) parts = String(txt).split(/\n+/).map(function(s){ return s.trim(); }).filter(Boolean);
+        if (!parts.length) parts = [String(txt)];
+        descEl.innerHTML = '';
+        parts.forEach(function(p){ var el = document.createElement('p'); el.textContent = p; descEl.appendChild(el); });
+      })();
 
       // Top spec chips — '—' when the broker didn't provide the value.
       setId('ldsh-beds',  (row.bedrooms  != null ? row.bedrooms  : '—'));
@@ -4843,6 +4969,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         Object.keys(det).forEach(function(k){
           var it = det[k];
           if (!it || !it.label) return;
+          if (k === 'al-utilities-row') return; // Phase 2 #7: utilities get their own scannable card section
           if (!(it.value || it.value === 0)) return;
           if (parseFloat(it.value) < 0) return; // never surface negative spec values
           items.push([it.label, String(it.value)]);
@@ -4864,26 +4991,12 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
       }
 
-      // Amenities — rebuild from row.amenities (text[]), replacing the mock list.
-      var amenWrap = page.querySelector('.ld-sh-amenities');
-      if (amenWrap){
-        var amens = Array.isArray(row.amenities) ? row.amenities.filter(Boolean) : [];
-        amenWrap.innerHTML = '';
-        if (amens.length){
-          amens.forEach(function(a){
-            var d = document.createElement('div');
-            d.className = 'ld-sh-amen';
-            d.innerHTML = '<i class="fa-solid fa-check"></i> ';
-            d.appendChild(document.createTextNode(String(a)));
-            amenWrap.appendChild(d);
-          });
-        } else {
-          var none = document.createElement('div');
-          none.className = 'ld-sh-amen'; none.style.opacity = '.6';
-          none.textContent = 'No amenities listed';
-          amenWrap.appendChild(none);
-        }
-      }
+      // Amenities + Utilities — Phase 2 (#4, #7). The template keeps Amenities
+      // crammed in the left half of the bottom grid; we relocate a grouped
+      // Amenities + a scannable Utilities section to a FULL-WIDTH row below the
+      // grid (reduces the empty whitespace under the short Property Details
+      // column) and hide the original in-column list.
+      renderAmenitiesUtilities(page, row);
 
       // "Listed <date>" meta — drop the mock KNK-2026-0041 id.
       var metaEl = page.querySelector('.ld-sh-listed-meta');
@@ -5071,6 +5184,11 @@ document.addEventListener('DOMContentLoaded', async function() {
             });
         }
       }
+      // Reflect the TRUE saved state on the detail Save button (fixes the
+      // reopen-shows-unsaved bug); reads SAVED_IDS for this listing.
+      syncDetailSaveBtn(row.id);
+      // Activate the (template) Report button next to Save → opens the report modal.
+      wireDetailReportBtn();
       // "From the Same Broker" + "Similar Listings" — replace the template's
       // mock card rows with real listings. Guarded to run once per listing
       // (not on every refresh) to avoid extra queries + flicker.
@@ -5096,9 +5214,15 @@ document.addEventListener('DOMContentLoaded', async function() {
     function fillRelated(container, rows, emptyMsg){
       container.innerHTML = '';
       if (!rows.length){
+        // Phase 2 (#6): friendlier empty state — icon above the message,
+        // spanning the full grid width instead of a lone faint line.
         var none = document.createElement('div');
-        none.style.cssText = 'color:var(--tl);font-size:12.5px;padding:8px 2px;';
-        none.textContent = emptyMsg;
+        none.className = 'ld-sh-empty';
+        var ic = document.createElement('div'); ic.className = 'ld-sh-empty-ic';
+        ic.innerHTML = '<i class="fa-regular fa-folder-open"></i>';
+        var msg = document.createElement('div'); msg.className = 'ld-sh-empty-msg';
+        msg.textContent = emptyMsg;
+        none.appendChild(ic); none.appendChild(msg);
         container.appendChild(none);
         return;
       }
@@ -5140,13 +5264,167 @@ document.addEventListener('DOMContentLoaded', async function() {
       }
     }
 
+    // ---- Phase 2 (#4, #7): grouped Amenities + scannable Utilities ----------
+    // Amenity strings are a flat text[] mixing indoor/outdoor/security/etc.;
+    // group them by keyword into labelled buckets. Utilities live separately in
+    // details['al-utilities-row'] as a comma-joined string; render them as small
+    // icon cards instead of one long comma list.
+    var AMEN_GROUPS = [
+      ['Parking & Storage', ['garage','carport','parking','driveway','storage']],
+      ['Security',          ['security','cctv','guard','alarm','intercom','concierge','gate','24-hour','24/7','safety']],
+      ['Recreation & Wellness', ['pool','gym','fitness','sauna','jacuzzi','tennis','court','playground','clubhouse','spa','multipurpose','game']],
+      ['Outdoor',           ['garden','yard','terrace','balcony','grill','green area','roof','lawn','patio','deck','bbq','landscap']],
+      ['Indoor Comfort',    ['air conditioning','aircon','heating','fireplace','furnish','elevator','lift','water tank','walk-in','laundry','kitchen','dining','maid']],
+      ['Connectivity',      ['internet','wifi','wi-fi','fiber','cable','phone','network','intercom ']],
+      ['Utilities & Services', ['electric','water','gas','power','sewer','sewage','solar','generator']]
+    ];
+    var UTIL_ICONS = [
+      [['electric','power'],   'fa-bolt'],
+      [['water'],              'fa-droplet'],
+      [['internet','wifi','wi-fi','fiber'], 'fa-wifi'],
+      [['sewer','sewage','drain'], 'fa-recycle'],
+      [['gas'],                'fa-fire-flame-simple'],
+      [['backup','generator','solar'], 'fa-plug-circle-bolt']
+    ];
+    function amenIcon(cat){
+      switch (cat){
+        case 'Parking & Storage': return 'fa-square-parking';
+        case 'Security': return 'fa-shield-halved';
+        case 'Recreation & Wellness': return 'fa-person-swimming';
+        case 'Outdoor': return 'fa-tree';
+        case 'Indoor Comfort': return 'fa-couch';
+        case 'Connectivity': return 'fa-wifi';
+        case 'Utilities & Services': return 'fa-plug';
+        default: return 'fa-check';
+      }
+    }
+    function utilIcon(name){
+      var s = String(name).toLowerCase();
+      for (var i=0;i<UTIL_ICONS.length;i++){
+        var kws = UTIL_ICONS[i][0];
+        for (var j=0;j<kws.length;j++){ if (s.indexOf(kws[j])>=0) return UTIL_ICONS[i][1]; }
+      }
+      return 'fa-circle-check';
+    }
+    function classifyAmenity(a){
+      var s = String(a).toLowerCase();
+      for (var i=0;i<AMEN_GROUPS.length;i++){
+        var kws = AMEN_GROUPS[i][1];
+        for (var j=0;j<kws.length;j++){ if (s.indexOf(kws[j])>=0) return AMEN_GROUPS[i][0]; }
+      }
+      return 'Other Features';
+    }
+    function renderAmenitiesUtilities(page, row){
+      // Hide the template's in-column Amenities list (title + chip wrap).
+      var origWrap = page.querySelector('.ld-sh-amenities');
+      if (origWrap){
+        origWrap.style.display = 'none';
+        var prevT = origWrap.previousElementSibling;
+        if (prevT && prevT.classList && prevT.classList.contains('ld-sh-section-title')) prevT.style.display = 'none';
+      }
+      var grid = page.querySelector('.ld-sh-bottom-grid');
+      if (!grid || !grid.parentNode) return;
+      // Full-width host, created once, re-populated on every render.
+      var host = page.querySelector('.ld-sh-au');
+      if (!host){
+        host = document.createElement('div');
+        host.className = 'ld-sh-au';
+        grid.parentNode.insertBefore(host, grid.nextSibling);
+      }
+      host.innerHTML = '';
+
+      // Utilities value (comma-joined) drives both the dedup below and the cards.
+      var det = row.details || {};
+      var uRow = det['al-utilities-row'];
+      var uVal = (uRow && uRow.value != null) ? String(uRow.value) : '';
+      var utils = uVal.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+      var norm = function(s){ return String(s).toLowerCase().replace(/[^a-z0-9]/g, ''); };
+      var utilTokens = utils.map(norm);
+
+      // --- Amenities (grouped) ---
+      // Drop amenity strings already shown as Utility cards (the broker often
+      // double-enters "Water"/"Electricity"/"Internet" in both fields), so the
+      // dedicated Utilities section stays the single source for those.
+      var amens = (Array.isArray(row.amenities) ? row.amenities.filter(Boolean) : []).filter(function(a){
+        var n = norm(a);
+        return !utilTokens.some(function(t){ return t && (t === n || t.indexOf(n) >= 0 || n.indexOf(t) >= 0); });
+      });
+      var amTitle = document.createElement('div');
+      amTitle.className = 'ld-sh-section-title';
+      amTitle.textContent = 'Amenities';
+      host.appendChild(amTitle);
+      if (!amens.length){
+        var noAm = document.createElement('div');
+        noAm.style.cssText = 'color:var(--tl);font-size:12.5px;';
+        noAm.textContent = 'No amenities listed for this property.';
+        host.appendChild(noAm);
+      } else {
+        var buckets = {};
+        amens.forEach(function(a){ var c = classifyAmenity(a); (buckets[c] = buckets[c] || []).push(a); });
+        var order = AMEN_GROUPS.map(function(g){ return g[0]; }).concat(['Other Features']);
+        var groupsWrap = document.createElement('div');
+        groupsWrap.className = 'ld-sh-amen-groups';
+        order.forEach(function(cat){
+          var list = buckets[cat];
+          if (!list || !list.length) return;
+          var g = document.createElement('div'); g.className = 'ld-sh-amen-group';
+          var h = document.createElement('div'); h.className = 'ld-sh-amen-group-title';
+          h.innerHTML = '<i class="fa-solid ' + amenIcon(cat) + '"></i> ';
+          h.appendChild(document.createTextNode(cat));
+          g.appendChild(h);
+          var chips = document.createElement('div'); chips.className = 'ld-sh-amenities';
+          list.forEach(function(a){
+            var d = document.createElement('div'); d.className = 'ld-sh-amen';
+            d.innerHTML = '<i class="fa-solid fa-check"></i> ';
+            d.appendChild(document.createTextNode(String(a)));
+            chips.appendChild(d);
+          });
+          g.appendChild(chips);
+          groupsWrap.appendChild(g);
+        });
+        host.appendChild(groupsWrap);
+      }
+
+      // --- Utilities (scannable cards) --- (utils computed above)
+      if (utils.length){
+        var uTitle = document.createElement('div');
+        uTitle.className = 'ld-sh-section-title';
+        uTitle.style.marginTop = '22px';
+        uTitle.textContent = 'Utilities';
+        host.appendChild(uTitle);
+        var uGrid = document.createElement('div'); uGrid.className = 'ld-sh-util-grid';
+        utils.forEach(function(u){
+          var card = document.createElement('div'); card.className = 'ld-sh-util-card';
+          var ic = document.createElement('div'); ic.className = 'ld-sh-util-ic';
+          ic.innerHTML = '<i class="fa-solid ' + utilIcon(u) + '"></i>';
+          var tx = document.createElement('div'); tx.className = 'ld-sh-util-name';
+          tx.textContent = u;
+          card.appendChild(ic); card.appendChild(tx);
+          uGrid.appendChild(card);
+        });
+        host.appendChild(uGrid);
+      }
+    }
+
     // Paint the listing-detail agent card (name/role/avatar) from a broker
     // object and refresh the broker-profile page if it's open.
     function applyDetailBroker(page, b){
       var nameEl = page.querySelector('.ld-sh-agent-name');
       if (nameEl) nameEl.textContent = b.name;
       var roleEl = page.querySelector('.ld-sh-agent-role');
-      if (roleEl) roleEl.textContent = 'Certified Broker' + (b.license ? ' · PRC ' + b.license : '');
+      if (roleEl){
+        // Privacy (Phase 2 #5): never render the raw PRC license number in the
+        // public property view. Show a credibility indicator instead — a broker
+        // with a license number on file gets a "License Verified" badge.
+        roleEl.innerHTML = '';
+        roleEl.appendChild(document.createTextNode('Certified Broker'));
+        if (b.license){
+          var vb = document.createElement('span');
+          vb.className = 'ld-sh-verified';
+          vb.innerHTML = '<i class="fa-solid fa-circle-check"></i> License Verified';
+          roleEl.appendChild(vb);
+        }
+      }
       var avEl = page.querySelector('.ld-sh-agent-row img');
       if (avEl){
         var initials = (((b.first_name || ' ')[0] || '') + ((b.last_name || ' ')[0] || '')).toUpperCase().trim() || 'K';
@@ -5439,6 +5717,9 @@ document.addEventListener('DOMContentLoaded', async function() {
       window.toggleSave        = toggleSave;
       window.confirmUnsave     = confirmUnsave;
       window.openDetail        = openDetail;
+      // Route the detail Save button through the real save flow. Re-asserted every
+      // start() so the template unpack can't restore its persistence-less mock.
+      window.toggleLDSHSave    = detailSaveClick;
 
       window.setSortBy = function(v){ lstSort = v || 'popular'; loadListingsPage(true); };
       window.setView   = function(mode, btn){
@@ -7100,6 +7381,11 @@ document.addEventListener('DOMContentLoaded', async function() {
       // resurface rows the user has filtered out.
       var si = document.getElementById('chat-search');
       if (si && si.value) filterConvList(si.value);
+      // Phase 3 #1: refresh the sidebar Messages unread-count badge whenever the
+      // conversation list re-renders. renderConvList() is the common tail of the
+      // load, realtime-insert, and mark-read paths, so this single hook keeps the
+      // badge live without touching the per-conversation unread logic.
+      if (window.__plUpdateMsgBadge) window.__plUpdateMsgBadge();
     }
 
     // ─── Right panel (messages + composer) ────────────────────────
@@ -7679,6 +7965,110 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     // Debug.
     window.__konekChat = function(){ return { CONVERSATIONS: CONVERSATIONS.slice(), CURRENT_CONV_ID: CURRENT_CONV_ID, MESSAGES_BY_CONV: MESSAGES_BY_CONV }; };
+  })();
+  </script>
+
+  <!-- ==========================================================================
+       k-msg-nav-badge (Phase 3 #1) — aggregate unread-count badge on the sidebar
+       Messages nav link. Purely additive: it READS window.CONVERSATIONS (owned by
+       k-messages) and counts conversations with .unread === true, i.e. the exact
+       same flag that drives the per-conversation green dot. It does NOT change the
+       data model or the unread logic. Styling mirrors the template's .notif-badge
+       so the messages count matches the notification bell badge. Updated live via
+       window.__plUpdateMsgBadge(), called at the tail of renderConvList() (load /
+       realtime-insert / mark-read all funnel through there) plus a short boot poll
+       so the badge attaches once the sidebar nav exists after bundle unpack.
+       ========================================================================== -->
+  <script id="k-msg-nav-badge">
+  (function(){
+    // Inject CSS into <head> (appended <style> tags get wiped by the bundler's
+    // documentElement.replaceWith, so we inject like the other k-* blocks).
+    function injectCSS(){
+      if (document.getElementById('k-msg-nav-badge-css')) return;
+      var css = [
+        /* Match .notif-badge exactly (16px red circle, white 9px bold), so the */
+        /* messages count is visually consistent with the notification bell.    */
+        '.msg-nav-badge{',
+        '  position:absolute; top:-7px; right:-9px;',
+        '  width:16px; height:16px; border-radius:50%;',
+        '  background:var(--red,#c83e3e); color:#fff;',
+        '  font-size:9px; font-weight:700; line-height:1;',
+        '  display:none; align-items:center; justify-content:center;',
+        '  border:2px solid transparent; box-sizing:border-box;',
+        '  pointer-events:none; z-index:2;',
+        '}',
+        /* Soft pulse, same keyframe name/timing as the notif badge (redefined  */
+        /* here so this block is self-contained if k-phase1 CSS isn't present).  */
+        '@keyframes k-badge-pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.08)}}',
+        '.msg-nav-badge{ animation:k-badge-pulse 2.4s ease-in-out infinite; }',
+        '@media (prefers-reduced-motion: reduce){ .msg-nav-badge{ animation:none !important; } }'
+      ].join('\n');
+      var st = document.createElement('style');
+      st.id = 'k-msg-nav-badge-css';
+      st.textContent = css;
+      (document.head || document.documentElement).appendChild(st);
+    }
+
+    // Count conversations that have unread messages — same .unread flag the chat
+    // list uses for the green dot. Reads the live window.CONVERSATIONS reference.
+    function unreadConvCount(){
+      var list = window.CONVERSATIONS || [];
+      var n = 0;
+      for (var i = 0; i < list.length; i++){ if (list[i] && list[i].unread) n++; }
+      return n;
+    }
+
+    // Sidebar Messages nav link(s) only — the mobile tab bar uses <button>s, not
+    // a.nav-link, so it's naturally excluded (task scope: sidebar).
+    function msgLinks(){
+      return Array.prototype.slice.call(
+        document.querySelectorAll('a.nav-link[data-page="messages"]'));
+    }
+
+    function ensureBadge(link){
+      // First <i> is the comment-dots icon (the §7.3 lock icon, if any, is
+      // appended after it). Anchor with position/overflow is fine — the badge's
+      // small offsets keep it inside the anchor's border-box, so it isn't clipped.
+      var icon = link.querySelector('i');
+      if (!icon) return null;
+      try { if (getComputedStyle(icon).position === 'static') icon.style.position = 'relative'; }
+      catch(e){ icon.style.position = 'relative'; }
+      var b = link.querySelector('.msg-nav-badge');
+      if (!b){
+        b = document.createElement('span');
+        b.className = 'msg-nav-badge';
+        b.setAttribute('aria-hidden', 'true'); // decorative; the link text conveys "Messages"
+        icon.appendChild(b);
+      }
+      return b;
+    }
+
+    function update(){
+      injectCSS();
+      var n = unreadConvCount();
+      msgLinks().forEach(function(link){
+        var b = ensureBadge(link);
+        if (!b) return;
+        if (n > 0){
+          b.textContent = n > 99 ? '99+' : String(n);
+          b.style.display = 'flex';
+        } else {
+          b.style.display = 'none'; // zero → hide entirely, no empty circle
+        }
+      });
+    }
+
+    // Exposed so renderConvList() (k-messages) can call it on every re-render.
+    window.__plUpdateMsgBadge = update;
+
+    function boot(){ update(); }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+    else boot();
+    window.addEventListener('konek-bundler-done', boot);
+    // Brief poll so the badge attaches once the sidebar nav renders after unpack;
+    // after that, renderConvList() drives all live updates.
+    var tries = 0;
+    var iv = setInterval(function(){ update(); if (++tries > 20) clearInterval(iv); }, 400);
   })();
   </script>
 
@@ -9838,6 +10228,237 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
     else start();
     window.addEventListener('konek-bundler-done', start);
+  })();
+  </script>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       PHASE 1 — visual/readability refinements (styling only).
+       CSS injected into <head> (the bundler wipes appended <style>
+       tags), idempotent, re-asserted after konek-bundler-done — same
+       pattern as k-auth-light. No markup/logic changes.
+  ═══════════════════════════════════════════════════════════════ -->
+  <script id="k-phase1-ui">
+  (function(){
+    var CSS = [
+      /* 1. Home hero banner — ~17% shorter so Latest News peeks in,
+            and more breathing room before the Latest News section. */
+      '.hc-img{height:250px !important;}',
+      '@media (max-width:820px){.hc-img{height:170px !important;}}',
+      '.home-carousel{margin-bottom:32px !important;}',
+      '.home-latest-news{margin-top:8px !important;}',
+
+      /* 2. Sidebar active state — accent indicator bar + bolder label. */
+      '.sb-nav li a.active{font-weight:700 !important;}',
+      '.sb-nav li a.active::before{content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);width:3px;height:22px;border-radius:0 3px 3px 0;background:#5dcc7e;}',
+
+      /* 3. Latest-news cards — bigger thumb, more gap, clearer hover,
+            more prominent date. (Image zoom on hover already exists.) */
+      '.hln-grid{gap:20px !important;}',
+      '.hln-card-img{height:180px !important;}',
+      '.hln-card{transition:transform .18s ease,box-shadow .18s ease !important;}',
+      '.hln-card:hover{transform:translateY(-4px) !important;box-shadow:0 14px 34px rgba(10,30,18,.16) !important;}',
+      '.hln-card-date{font-size:12px !important;color:var(--tm) !important;font-weight:600 !important;}',
+
+      /* 4. Article page — darker body text, looser paragraphs, and a
+            comfortable centered reading column (hero image stays full
+            width; only the text column is constrained). */
+      '.article-body p{color:var(--tm) !important;line-height:1.75 !important;margin-bottom:18px !important;}',
+      '.article-body h3{margin:26px 0 12px !important;}',
+      '.article-title,.article-byline,.article-body{max-width:760px !important;margin-left:auto !important;margin-right:auto !important;}',
+
+      /* 5. Recent Listings (home right panel) — remove the double top
+            margin so the first row sits under the title; make the
+            detail line larger, darker and better spaced. */
+      '.hrs-title{margin-bottom:0 !important;}',
+      '.hrs-header{margin-bottom:8px !important;}',
+      '.hrl-name{margin-bottom:1px !important;}',
+      '.hrl-loc{font-size:11.5px !important;color:var(--tm) !important;line-height:1.4 !important;margin-top:2px !important;}'
+    ].join('');
+    function inject(){
+      if (document.getElementById('k-phase1-ui-css')) return;
+      if (!document.head) return;
+      var s = document.createElement('style'); s.id = 'k-phase1-ui-css';
+      s.textContent = CSS;
+      document.head.appendChild(s);
+    }
+    inject();
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', inject);
+    window.addEventListener('konek-bundler-done', inject);
+    var n = 0, iv = setInterval(function(){ n++; inject(); if (n > 60) clearInterval(iv); }, 100);
+  })();
+  </script>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       PHASE 2 — layout structure & consistency (styling + light DOM).
+       CSS injected into <head> (same self-healing pattern as k-phase1-ui);
+       plus an article-sidebar builder that wraps openArticle() to fill
+       Related Articles (same category) + Trending News. Amenities grouping,
+       utilities cards, verified badge and empty states are rendered by
+       k-listings — this block only styles them. No routing/data changes.
+  ═══════════════════════════════════════════════════════════════ -->
+  <script id="k-phase2-ui">
+  (function(){
+    var CSS = [
+      /* #2 Property specs align with Save/Report — the 3 spec pills fill the
+            row equally so their edges line up with the 2 action buttons below. */
+      '.ld-sh-specs{flex-wrap:nowrap !important;}',
+      '.ld-sh-spec{flex:1 1 0 !important;min-width:0 !important;justify-content:center !important;}',
+      '@media (max-width:520px){.ld-sh-specs{flex-wrap:wrap !important;}.ld-sh-spec{flex:1 1 40% !important;}}',
+
+      /* #3 About This Property — darker, looser body + spaced paragraphs. */
+      '.ld-sh-bottom-grid{margin-top:6px !important;}',
+      '.ld-sh-desc{color:var(--tm) !important;line-height:1.85 !important;margin-bottom:22px !important;}',
+      '.ld-sh-desc p{margin:0 0 14px !important;}',
+      '.ld-sh-desc p:last-child{margin-bottom:0 !important;}',
+
+      /* #5 Verified-broker badge (replaces the raw PRC number). */
+      '.ld-sh-verified{display:inline-flex;align-items:center;gap:5px;margin-left:6px;padding:2px 9px;border-radius:20px;background:rgba(63,168,95,.14);color:var(--gd);font-size:10.5px;font-weight:800;vertical-align:middle;}',
+      '.ld-sh-verified i{font-size:10.5px;}',
+
+      /* #4 Amenities — full-width grouped section below the details grid. */
+      '.ld-sh-au{width:100%;margin:6px 0 4px;}',
+      '.ld-sh-amen-groups{display:grid;grid-template-columns:repeat(2,1fr);gap:20px 30px;margin-bottom:4px;}',
+      '.ld-sh-amen-group-title{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:var(--ts);margin-bottom:10px;}',
+      '.ld-sh-amen-group-title i{color:var(--gl);font-size:13px;}',
+      '@media (max-width:720px){.ld-sh-amen-groups{grid-template-columns:1fr;}}',
+
+      /* #8 Amenity chips — subtle hover feedback, consistent with sim cards. */
+      '.ld-sh-amen{transition:background .14s,box-shadow .14s,transform .14s;}',
+      '.ld-sh-amen:hover{background:rgba(255,255,255,.96);box-shadow:var(--sh);transform:translateY(-1px);}',
+
+      /* #7 Utilities — scannable icon cards instead of one long comma list. */
+      '.ld-sh-util-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;}',
+      '.ld-sh-util-card{display:flex;align-items:center;gap:11px;background:rgba(255,255,255,.65);border:1px solid rgba(255,255,255,.85);border-radius:var(--r,16px);padding:12px 14px;transition:transform .15s,box-shadow .15s;}',
+      '.ld-sh-util-card:hover{transform:translateY(-2px);box-shadow:var(--sh);}',
+      '.ld-sh-util-ic{width:36px;height:36px;flex:0 0 36px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:rgba(63,168,95,.12);color:var(--gd);font-size:15px;}',
+      '.ld-sh-util-name{font-size:13px;font-weight:700;color:var(--td);line-height:1.3;}',
+      '@media (max-width:720px){.ld-sh-util-grid{grid-template-columns:repeat(2,1fr);}}',
+      '@media (max-width:440px){.ld-sh-util-grid{grid-template-columns:1fr;}}',
+
+      /* #6 From the Same Broker / Similar — cards size naturally (min 210px)
+            instead of squeezing to 5 columns, so nothing feels cramped. */
+      '#ld-same-broker{grid-template-columns:repeat(auto-fill,minmax(210px,1fr)) !important;}',
+      '.ld-sh-similar-scroll{grid-template-columns:repeat(auto-fill,minmax(210px,1fr)) !important;}',
+      '.ld-sh-sim-name{white-space:normal !important;overflow:visible !important;text-overflow:clip !important;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.3 !important;}',
+      /* Empty state — icon above the message, spanning the full grid width. */
+      '.ld-sh-empty{grid-column:1 / -1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:30px 16px;text-align:center;background:rgba(255,255,255,.45);border:1px dashed var(--br,#d4dcd4);border-radius:var(--r,16px);}',
+      '.ld-sh-empty-ic{width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(63,168,95,.10);color:var(--gl);font-size:22px;}',
+      '.ld-sh-empty-msg{font-size:13px;color:var(--ts);font-weight:600;max-width:320px;}',
+
+      /* #1 Article sidebar — Related + Trending both scroll within the panel. */
+      '.article-right{overflow-y:auto !important;}',
+      '.art-related-list{flex:0 0 auto !important;overflow:visible !important;}',
+      '.art-trending-title{margin-top:8px !important;border-top:1px solid rgba(210,224,215,.45) !important;}',
+      '.art-rel-item img{border-radius:9px;object-fit:cover;}'
+    ].join('');
+    function injectCss(){
+      if (document.getElementById('k-phase2-ui-css')) return;
+      if (!document.head) return;
+      var s = document.createElement('style'); s.id = 'k-phase2-ui-css';
+      s.textContent = CSS;
+      document.head.appendChild(s);
+    }
+
+    // ---- #1 Article page sidebar: Related Articles + Trending News ----------
+    function relItem(a){
+      var type = (a.type || 'news');
+      var item = document.createElement('div');
+      item.className = 'art-rel-item';
+      item.addEventListener('click', function(){
+        if (window.openArticle) window.openArticle(a.type, a.title, 'ProList Team', a.date, a.img, a.body);
+      });
+      var img = document.createElement('img');
+      img.src = a.img || ''; img.alt = ''; img.loading = 'lazy';
+      var body = document.createElement('div');
+      var nm = document.createElement('div'); nm.className = 'art-rel-name'; nm.textContent = a.title || 'Untitled';
+      var cat = document.createElement('div'); cat.className = 'art-rel-cat';
+      cat.textContent = type.charAt(0).toUpperCase() + type.slice(1);
+      body.appendChild(nm); body.appendChild(cat);
+      item.appendChild(img); item.appendChild(body);
+      return item;
+    }
+    function emptyNote(msg){
+      var d = document.createElement('div');
+      d.style.cssText = 'color:var(--tl);font-size:12.5px;padding:10px 8px;';
+      d.textContent = msg;
+      return d;
+    }
+    function fillSidebar(curType, curTitle){
+      var right = document.querySelector('#page-article .article-right');
+      if (!right) return;
+      var groups = window.HOME_ARTICLES || {};
+      var type = (curType || 'news').toLowerCase();
+
+      // (a) Related Articles — same category (type) as the current article.
+      var relTitle = right.querySelector('.art-related-title');
+      if (relTitle) relTitle.textContent = 'Related Articles';
+      var relList = right.querySelector('.art-related-list');
+      var same = (groups[type] || []).filter(function(a){ return (a.title || '') !== curTitle; });
+      if (relList){
+        relList.innerHTML = '';
+        if (same.length) same.slice(0, 6).forEach(function(a){ relList.appendChild(relItem(a)); });
+        else relList.appendChild(emptyNote('No related articles in this category yet.'));
+      }
+
+      // (b) Trending News — created once, populated across all categories.
+      // TODO(phase-3): real "most viewed" ranking. articles.view_count exists
+      // but isn't incremented on article open yet, so trending uses the admin
+      // `is_trending` flag (window.TRENDING_ARTICLES); when none are flagged we
+      // fall back to the most recent across every category as a stand-in.
+      var trendTitle = right.querySelector('.art-trending-title');
+      var trendList = right.querySelector('.art-trending-list');
+      if (!trendTitle){
+        trendTitle = document.createElement('h3');
+        trendTitle.className = 'art-related-title art-trending-title';
+        trendTitle.textContent = 'Trending News';
+        right.appendChild(trendTitle);
+        trendList = document.createElement('div');
+        trendList.className = 'art-related-list art-trending-list';
+        right.appendChild(trendList);
+      }
+      var trend = (window.TRENDING_ARTICLES && window.TRENDING_ARTICLES.length)
+        ? window.TRENDING_ARTICLES.slice()
+        : Object.keys(groups).reduce(function(acc, k){ return acc.concat(groups[k] || []); }, []);
+      trend = trend.filter(function(a){ return (a.title || '') !== curTitle; });
+      trendList.innerHTML = '';
+      if (trend.length) trend.slice(0, 6).forEach(function(a){ trendList.appendChild(relItem(a)); });
+      else trendList.appendChild(emptyNote('No trending articles yet.'));
+    }
+
+    // Fallback body injection (mirrors k-home-render's wrapper) so the article
+    // body renders even if this wrapper installs before k-home-render's — the
+    // two flags below then keep either side from double-wrapping.
+    function injectBody(bodyHtml){
+      if (!bodyHtml) return;
+      try {
+        var el = document.getElementById('art-body');
+        if (!el) return;
+        // Sanitize via the shared helper (k-article-sanitize) before injecting.
+        el.innerHTML = window.__plArticleBodyHtml
+          ? window.__plArticleBodyHtml(bodyHtml)
+          : String(bodyHtml).replace(/</g, '&lt;');
+      } catch(e){}
+    }
+    function wrapOpenArticle(){
+      if (!window.openArticle || window.openArticle.__plPhase2Sidebar) return;
+      var orig = window.openArticle;
+      window.openArticle = function(type, title, author, date, img, bodyHtml){
+        var r = orig.apply(this, arguments);
+        injectBody(bodyHtml);
+        try { fillSidebar(type, title); } catch(e){ console.warn('[k-phase2] sidebar', e); }
+        return r;
+      };
+      // Set both flags: __plPhase2Sidebar stops us re-wrapping; __konekWrapped
+      // stops k-home-render re-wrapping on top of ours.
+      window.openArticle.__konekWrapped = true;
+      window.openArticle.__plPhase2Sidebar = true;
+    }
+
+    function boot(){ injectCss(); wrapOpenArticle(); }
+    boot();
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+    window.addEventListener('konek-bundler-done', boot);
+    var n = 0, iv = setInterval(function(){ n++; boot(); if (n > 60) clearInterval(iv); }, 100);
   })();
   </script>
 </body>

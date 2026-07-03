@@ -11171,8 +11171,10 @@ document.addEventListener('DOMContentLoaded', async function() {
   </script>
   <!-- ==========================================================================
        k-desktop-scale — Phase 1a: surgical desktop wasted-space fixes.
-       Desktop-only (min-width:1025px) so the <=820px mobile chrome and the
-       821-1024px tablet band are untouched. Injected into <head> and re-asserted
+       Phase 2: breakpoint lowered to min-width:821px so the 821-1024px tablet
+       band is treated like desktop (caps + dashboard scroll safety-net apply),
+       eliminating the fixed-island seam. <=820px stays owned by k-mobile-js.
+       Injected into <head> and re-asserted
        on konek-bundler-done (the bundler wipes appended tags) — same self-
        reinjecting pattern as k-listings-ui / k-chat-polish. No fixed-px panel,
        type, or rem migration is touched here (that is the separate fluid phase).
@@ -11181,14 +11183,16 @@ document.addEventListener('DOMContentLoaded', async function() {
        k-fluid-root — Phase 1b Stage 1: height-keyed fluid root font-size so the
        rem-migrated UI scales continuously with the viewport (taller screens get a
        fuller UI; content that fits at one height fits at all heights → the
-       one-screen dashboard can't clip). Desktop-only (min-width:1025px); mobile &
-       tablet keep the default 16px root, so there rem == the original px value.
-       Self-reinjecting into <head> (the bundler wipes appended tags). Inert until
-       sizes are migrated to rem.
+       one-screen dashboard can't clip). Phase 2: breakpoint lowered to
+       min-width:821px so the tablet band scales continuously with desktop (no
+       16->14 snap at the old 1025 seam). A width term (min(1.48vh,1.9vw)) caps
+       the root on narrow+tall tablets so width-based rem dims can't overflow.
+       Only <=820px keeps the default 16px root (mobile, owned by k-mobile-js).
+       Self-reinjecting into <head> (the bundler wipes appended tags).
        ========================================================================== -->
   <script id="k-fluid-root">
   (function(){
-    var CSS = '@media (min-width:1025px){html{font-size:clamp(14px,1.48vh,18px);}}';
+    var CSS = '@media (min-width:821px){html{font-size:clamp(14px,min(1.48vh,1.9vw),18px);}}';
     function inject(){
       if (!document.head) return;
       var ex = document.getElementById('k-fluid-root-css');
@@ -11205,7 +11209,7 @@ document.addEventListener('DOMContentLoaded', async function() {
   <script id="k-desktop-scale">
   (function(){
     var CSS = [
-      '@media (min-width:1025px){',
+      '@media (min-width:821px){',
         /* Settings: bound the label<->control void created by space-between
            rows on a full-width column (measured ~1402px@1920 / 2042px@2560). */
         '#page-settings .settings-content{max-width:960px;}',

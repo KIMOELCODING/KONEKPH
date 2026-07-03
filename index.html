@@ -1173,7 +1173,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         var fn = {
           'page-listings':      function(){ if (window.renderListings2)  window.renderListings2(); },
           'page-your-listings': function(){ if (window.renderYourListings) window.renderYourListings(); },
-          'page-bookmarks':     function(){ if (window.renderBookmarks2)  window.renderBookmarks2(); },
+          'page-bookmarks':     function(){ if (window.renderBookmarks2)  window.renderBookmarks2(); if (window.loadBookmarks) window.loadBookmarks(); },
           'page-listing-detail':function(){ if (window.__konekRefreshDetail) window.__konekRefreshDetail(); },
           'page-dashboard':     function(){ if (window.renderDashboard) window.renderDashboard(); },
           'page-home':          function(){
@@ -2153,6 +2153,34 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
     window.__konekOpenUpgrade = function(){ if (billingOn()) openOverlay('overlay-upgrade'); };
 
+    // ---- RESA §29 accuracy gate: promise-based confirm --------------------
+    // Used by the Add-Listing submit path (k-listings submitForm). Replaces the
+    // old selector-based hookAddListing interception, which never matched the
+    // real submit button (a plain .btn-primary with an inline onclick, no
+    // type="submit"). Resolves true only after the broker ticks the checkbox and
+    // clicks Confirm; false on Cancel. Reuses the overlay DOM built in inject().
+    window.__konekConfirmAccuracy = function(){
+      return new Promise(function(resolve){
+        var chk   = document.getElementById('k-accuracy-check');
+        var okBtn = document.getElementById('k-accuracy-confirm');
+        var noBtn = document.getElementById('k-accuracy-cancel');
+        // Overlay not injected (shouldn't happen) → don't block listing creation.
+        if (!chk || !okBtn) { resolve(true); return; }
+        // Reset each open so a prior confirmation can't carry over.
+        chk.checked = false; okBtn.disabled = true;
+        var settled = false;
+        function done(val){
+          if (settled) return; settled = true;
+          okBtn.onclick = null; if (noBtn) noBtn.onclick = null;
+          closeOverlay('overlay-accuracy-agreement');
+          resolve(val);
+        }
+        okBtn.onclick = function(){ if (!chk.checked) return; done(true); };
+        if (noBtn) noBtn.onclick = function(){ done(false); };
+        openOverlay('overlay-accuracy-agreement');
+      });
+    };
+
     // ---- inject DOM on ready ---------------------------------------------
     function inject(){
       var main = document.querySelector('#app-shell .main') || document.querySelector('.main') || document.body;
@@ -2547,46 +2575,25 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
 
     // ---- Add Listing accuracy gate ---------------------------------------
-    function hookAddListing(){
-      var modal = document.getElementById('overlay-add-listing');
-      if (!modal) return;
-      var form = modal.querySelector('form') || modal;
-      // Find the submit button(s) inside Add Listing
-      var submitBtn = modal.querySelector('button[type="submit"], button.k-submit-listing, [data-action="submit-listing"]');
-      if (!submitBtn || submitBtn.dataset.kAccuracyHooked) return;
-      submitBtn.dataset.kAccuracyHooked = '1';
-      submitBtn.addEventListener('click', function(e){
-        if (submitBtn.dataset.kAccuracyOk === '1') {
-          submitBtn.dataset.kAccuracyOk = '';
-          return; // proceed with original submit
-        }
-        e.preventDefault(); e.stopImmediatePropagation();
-        openOverlay('overlay-accuracy-agreement');
-        var confirmBtn = document.getElementById('k-accuracy-confirm');
-        if (confirmBtn) {
-          confirmBtn.onclick = function(){
-            closeOverlay('overlay-accuracy-agreement');
-            submitBtn.dataset.kAccuracyOk = '1';
-            submitBtn.click();
-          };
-        }
-      }, true);
-    }
+    // NOTE: the old selector-based hookAddListing() gate was removed — its
+    // querySelector('button[type="submit"], .k-submit-listing, …') never matched
+    // the real Add-Listing button, so the accuracy overlay never fired. The gate
+    // now lives in k-listings submitForm() via window.__konekConfirmAccuracy(),
+    // wired to the submit function so it can't silently break on a markup change.
 
-    // ---- post-login routing wrapper --------------------------------------
-    function wrapDoLogin(){
-      if (typeof window.doLogin !== 'function' || window.doLogin.__konekWrapped) return;
-      var original = window.doLogin;
-      var wrapped = function(){
-        var r = original.apply(this, arguments);
-        try { route(); } catch (e) {}
-        return r;
-      };
-      wrapped.__konekWrapped = true;
-      window.doLogin = wrapped;
-    }
+    // NOTE: the old wrapDoLogin() wrapper was removed — __reAssertAuthFns (k-auth)
+    // reverts window.doLogin to the unwrapped real fn on every tick, so the wrapper
+    // never survived. The real doLogin already calls __konekRoute() itself, so no
+    // wrapper is needed.
     function route(){
       var u = window.__currentUser; if (!u) return;
+      // Rejected broker: show the re-apply overlay (mirrors doLogin / onAuthStateChange).
+      // Without this, a rejected broker who RELOADS (INITIAL_SESSION, not SIGNED_IN)
+      // falls through to the "under review" pending page with no way to reapply.
+      if (u.rejected_at) {
+        if (typeof window.__konekShowReapply === 'function') { window.__konekShowReapply(u.rejected_reason || 'No reason provided.'); }
+        return;
+      }
       if (u.is_approved === false) {
         // PAGES is a closure-const in the minified blob, so goTo('pending-approval')
         // silently no-ops (the key isn't registered). Always run the manual DOM
@@ -2607,8 +2614,6 @@ document.addEventListener('DOMContentLoaded', async function() {
     function boot(){
       inject();
       decorateLocks();
-      hookAddListing();
-      wrapDoLogin();
     }
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', boot);
@@ -2616,7 +2621,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       boot();
     }
     // Re-decorate after late mutations (sidebar may be re-rendered on login)
-    new MutationObserver(function(){ decorateLocks(); hookAddListing(); })
+    new MutationObserver(function(){ decorateLocks(); })
       .observe(document.body, { childList: true, subtree: true });
   })();
   </script>
@@ -3236,6 +3241,15 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
         var res = await window.sb.from('profiles').update(payload).eq('id', window.__currentUser.id);
         if (res.error) throw res.error;
+        // Keep the session-wide __currentUser in sync so the header/topbar avatar
+        // (painted by k-user-chrome from __currentUser on every navigation) doesn't
+        // revert to the pre-edit value until a full reload.
+        if (window.__currentUser){
+          if (payload.avatar_url) window.__currentUser.avatar_url = payload.avatar_url;
+          window.__currentUser.agency = payload.agency;
+          window.__currentUser.bio = payload.bio;
+          if (typeof window.__konekPaintUserChrome === 'function') { try { window.__konekPaintUserChrome(); } catch(e){} }
+        }
         state.pendingAvatarFile = null;
         state.pendingAvatarPreview = null;
         toast('Profile updated');
@@ -4847,13 +4861,44 @@ document.addEventListener('DOMContentLoaded', async function() {
       var empty = document.getElementById('bookmarks-empty');
       if (!grid) return;
       var ids = window.SAVED_IDS || new Set();
-      var data = (window.LISTINGS_DATA || []).filter(function(p){ return ids.has(p.id); });
+      // Union the fetched full saved set (any status/age) with the active feed
+      // (covers a brand-new save not yet in the fetched cache), deduped + filtered to
+      // the current SAVED_IDS. Filtering LISTINGS_DATA alone dropped saved listings
+      // outside the 50-most-recent-active window (archived/sold/older/own listings).
+      var byId = {};
+      (window.BOOKMARKS_DATA || []).forEach(function(p){ if (ids.has(p.id)) byId[p.id] = p; });
+      (window.LISTINGS_DATA  || []).forEach(function(p){ if (ids.has(p.id) && !byId[p.id]) byId[p.id] = p; });
+      var data = Object.keys(byId).map(function(k){ return byId[k]; });
+      // Any saved id not covered by what's loaded → fetch the full set (self-heals).
+      var haveAll = true;
+      ids.forEach(function(id){ if (!byId[id]) haveAll = false; });
+      if (!haveAll && !renderBookmarks.__loading) { loadBookmarks(); }
       if (!data.length){ grid.innerHTML=''; if (empty) empty.style.display='block'; return; }
       if (empty) empty.style.display='none';
       grid.className = savedView === 'tile' ? 'pg-grid' : 'pg-list';
       grid.innerHTML = '';
       data.forEach(function(p){ grid.appendChild(buildCard(p, { showSave:true, isBookmarkPage:true })); });
     }
+
+    // Fetch every saved listing by id (any status/age) so Bookmarks isn't limited to
+    // the 50-most-recent active feed. Cached in window.BOOKMARKS_DATA, mapped to the
+    // same card shape buildCard expects.
+    async function loadBookmarks(){
+      var ids = Array.from(window.SAVED_IDS || []);
+      if (!ids.length){ window.BOOKMARKS_DATA = []; renderBookmarks(); return; }
+      if (renderBookmarks.__loading) return;
+      renderBookmarks.__loading = true;
+      try {
+        var res = await window.sb.from('listings').select('*').in('id', ids);
+        if (res.error) throw res.error;
+        window.BOOKMARKS_DATA = (res.data || []).map(function(row){
+          return (typeof window.mapListing === 'function') ? window.mapListing(row) : row;
+        });
+      } catch(e){ console.warn('[k-listings] loadBookmarks', e); }
+      finally { renderBookmarks.__loading = false; }
+      renderBookmarks();
+    }
+    window.loadBookmarks = loadBookmarks;
 
     // ---------- save / unsave ----------
     function toggleSave(id){
@@ -5748,6 +5793,17 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (!uid){ window.__konekToast('You must be signed in.', true); return; }
       var data = collectForm(); if (!data) return;
       var err = validateForm(data); if (err){ window.__konekToast(err, true); return; }
+      // RESA §29 accuracy attestation — required before a NEW listing is created
+      // (edits don't re-stamp accuracy). Gated here on the submit function itself
+      // so it can't silently break via a button-selector mismatch again.
+      if (!editingId) {
+        if (typeof window.__konekConfirmAccuracy === 'function') {
+          var okAcc = await window.__konekConfirmAccuracy();
+          if (!okAcc) return;   // broker cancelled — abort, nothing stamped
+        } else {
+          console.warn('[k-listings] accuracy confirm helper missing — proceeding');
+        }
+      }
       var files = data._files || []; delete data._files;
       var modal = document.getElementById('overlay-add-listing');
       var btn = modal && modal.querySelector('.alm-footer .btn-primary');
@@ -7444,7 +7500,9 @@ document.addEventListener('DOMContentLoaded', async function() {
           last_message_preview: r.last_message_preview || '',
           last_read_at: state.last_read_at || null,
           // unread = has a message newer than last_read_at; if last_read_at null and we have any message, treat as unread.
-          unread: r.last_message_at && (!state.last_read_at || new Date(r.last_message_at) > new Date(state.last_read_at))
+          // The currently-open conversation is never unread — you're looking at it (and
+          // your own just-sent message would otherwise light up its own row).
+          unread: r.id !== CURRENT_CONV_ID && r.last_message_at && (!state.last_read_at || new Date(r.last_message_at) > new Date(state.last_read_at))
         };
       });
 
@@ -7846,16 +7904,21 @@ document.addEventListener('DOMContentLoaded', async function() {
       sending = false;
       renderMessages(CURRENT_CONV_ID);
 
+      // Advance our own last_read_at past the message we just sent (stamp it with
+      // the message's own server time so it stays read even after we navigate away
+      // and the conv list reloads without this conversation being active).
+      markRead(CURRENT_CONV_ID, res.data && res.data.created_at);
+
       // Refresh the sidebar preview/order — the trigger already updated
       // conversations.last_message_at, but our local CONVERSATIONS array is
       // out of sync until we re-fetch.
       loadConversations();
     }
 
-    async function markRead(convId){
+    async function markRead(convId, atIso){
       var uid = currentUid();
       if (!uid || !convId) return;
-      var nowIso = new Date().toISOString();
+      var nowIso = atIso || new Date().toISOString();
       // Per-message read receipts so the SENDER sees "Seen". SECURITY DEFINER
       // RPC because a recipient can't UPDATE the sender's rows directly.
       // Best-effort: if migration 0027 isn't applied yet this no-ops and the

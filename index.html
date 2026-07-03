@@ -2214,7 +2214,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         p2.className = 'page';
         p2.id = 'page-paywall';
         p2.innerHTML =
-          '<div style="max-width:880px;width:100%;">' +
+          '<div style="max-width:880px;width:100%;margin:0 auto;">' +
           '  <div style="text-align:center;margin-bottom:24px;">' +
           '    <h2 style="margin:0 0 6px;font-size:26px;">Your trial has ended</h2>' +
           '    <p style="margin:0;color:var(--tm,#4a5a4a);">Choose a plan to keep posting listings and unlock Premium features.</p>' +
@@ -11167,6 +11167,42 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
     window.addEventListener('konek-bundler-done', boot);
     var n = 0, iv = setInterval(function(){ n++; boot(); if (n > 60) clearInterval(iv); }, 100);
+  })();
+  </script>
+  <!-- ==========================================================================
+       k-desktop-scale — Phase 1a: surgical desktop wasted-space fixes.
+       Desktop-only (min-width:1025px) so the <=820px mobile chrome and the
+       821-1024px tablet band are untouched. Injected into <head> and re-asserted
+       on konek-bundler-done (the bundler wipes appended tags) — same self-
+       reinjecting pattern as k-listings-ui / k-chat-polish. No fixed-px panel,
+       type, or rem migration is touched here (that is the separate fluid phase).
+       ========================================================================== -->
+  <script id="k-desktop-scale">
+  (function(){
+    var CSS = [
+      '@media (min-width:1025px){',
+        /* Settings: bound the label<->control void created by space-between
+           rows on a full-width column (measured ~1402px@1920 / 2042px@2560). */
+        '#page-settings .settings-content{max-width:960px;}',
+        /* Simple content/scroll pages cap+center on wide screens so edge space
+           is not stranded. .inner-scroll is used only by inner pages (settings,
+           profile, help, premium, article) — NOT the full-bleed dashboard
+           (.dash-scroll) / messages (.msg-shell) / calendar (.cal-right), which
+           stay uncapped by design. Laptops <=1600px keep full width (main<1500). */
+        '.inner-scroll{width:100%;max-width:1500px;margin-inline:auto;box-sizing:border-box;}',
+      '}'
+    ].join('');
+    function inject(){
+      if (!document.head) return;
+      var ex = document.getElementById('k-desktop-scale-css');
+      if (ex){ if (ex.textContent !== CSS) ex.textContent = CSS; return; }
+      var s = document.createElement('style'); s.id = 'k-desktop-scale-css';
+      s.textContent = CSS; document.head.appendChild(s);
+    }
+    inject();
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', inject);
+    window.addEventListener('konek-bundler-done', inject);
+    var n = 0, iv = setInterval(function(){ n++; inject(); if (n > 60) clearInterval(iv); }, 100);
   })();
   </script>
 </body>

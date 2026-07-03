@@ -9855,6 +9855,15 @@ document.addEventListener('DOMContentLoaded', async function() {
       '  #page-listings .pg-list { gap: 10px !important; }',
       '  #page-listings .pg-list .pc { grid-template-columns: 108px 1fr !important; gap: 12px !important; align-items: center; padding: 8px !important; }',
       '  #page-listings .pg-list .pc-img { width: 108px !important; height: 88px !important; }',
+      // Phase 3 — touch-comfort: lift the genuinely-small *real* tap targets to a
+      // ~40px minimum and nudge the smallest functional labels +1px for legibility.
+      // Intentionally-compact decorative controls (e.g. .lss-arrow, numeric badges)
+      // are left as-is. Shared classes, so strictly scoped to <=820px here.
+      '  .btn, .btn-add-lst, .lst-select, .dash-hero-add { min-height: 40px !important; }',
+      '  .inner-back, .tf-add { min-width: 40px !important; min-height: 40px !important; }',
+      '  .rl-tab { min-height: 34px !important; }',
+      '  .rl-pg-btn { min-width: 34px !important; min-height: 34px !important; }',
+      '  .sc-sub, .sf-l, .settings-nav-section { font-size: 11px !important; }',
       '}'
     ].join('\n');
 

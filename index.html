@@ -4631,7 +4631,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     function iconBtn(iconClass, color, title){
       var b = document.createElement('button');
       b.title = title || '';
-      b.style.cssText = 'width:32px;height:32px;border-radius:8px;background:rgba(255,255,255,.92);border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:13px;color:'+color+';box-shadow:0 2px 8px rgba(0,0,0,.08);';
+      b.style.cssText = 'width:36px;height:36px;border-radius:9px;background:rgba(255,255,255,.92);border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:13px;color:'+color+';box-shadow:0 2px 8px rgba(0,0,0,.08);';
       var i = document.createElement('i'); i.className = iconClass; b.appendChild(i);
       return b;
     }
@@ -4805,9 +4805,34 @@ document.addEventListener('DOMContentLoaded', async function() {
         __lstObserver.observe(__lstSentinel);
       }
     }
+    // Tally the broker's listings by status and write the live totals into the
+    // four status-tab count badges. Computed from the FULL (unfiltered) set on
+    // every render, so the counts stay accurate as listings are added, edited,
+    // deleted, or change status — the template ships hardcoded mock numbers
+    // (5/2/2/1) with no data binding; this replaces them. 'rejected' listings
+    // have no dedicated tab and count only toward All (matches the 4-tab spec).
+    function syncYourListingCounts(){
+      var chips = document.querySelectorAll('#page-your-listings .yl-chip');
+      if (!chips.length) return;
+      var data = window.YOUR_LISTINGS || [];
+      var counts = { all: data.length, pending: 0, active: 0, archive: 0 };
+      data.forEach(function(p){
+        if (p.status === 'pending') counts.pending++;
+        else if (p.status === 'active') counts.active++;
+        else if (p.status === 'archive') counts.archive++;
+      });
+      var LABEL = { all: 'All', pending: 'Pending', active: 'Active', archive: 'Archived' };
+      chips.forEach(function(chip){
+        var m = (chip.getAttribute('onclick') || '').match(/setYourListingFilter\('([a-z]+)'/i);
+        var token = m ? m[1] : null;
+        if (token == null || !(token in counts)) return;
+        chip.innerHTML = LABEL[token] + ' <span style="opacity:.7;">' + counts[token] + '</span>';
+      });
+    }
     function renderYourListings(){
       var grid = document.getElementById('yl-grid');
       var empty = document.getElementById('yl-empty');
+      syncYourListingCounts();
       if (!grid) return;
       var data = (window.YOUR_LISTINGS || []).slice();
       if (ylFilter !== 'all') data = data.filter(function(p){ return p.status === ylFilter; });
@@ -10607,6 +10632,87 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', inject);
     window.addEventListener('konek-bundler-done', inject);
     var n = 0, iv = setInterval(function(){ n++; inject(); if (n > 60) clearInterval(iv); }, 100);
+  })();
+  </script>
+
+  <!-- ==========================================================================
+       k-listings-ui — Listings module Phase 1: denser responsive grid, tighter
+       cards, text truncation for equal heights, consistent section spacing, and
+       WCAG-fitted touch targets. Applied to View Listings, Your Listings, and
+       Saved (all three share the .pc card + .pg-grid). CSS is injected into
+       <head> and re-asserted on konek-bundler-done (the bundler wipes appended
+       <style> tags). Grid-wrapper padding is normalized in JS because those
+       wrappers are inline-styled with no class to target.
+       ========================================================================== -->
+  <script id="k-listings-ui">
+  (function(){
+    var PAGES = ['#page-listings','#page-your-listings','#page-bookmarks'];
+    function sel(suffix){ return PAGES.map(function(p){ return p + ' ' + suffix; }).join(','); }
+    var CSS = [
+      /* ── Responsive density: auto-fill so wide screens get more columns and
+            large portfolios stay scannable (~4-5 cols desktop, 5-6 wide) ── */
+      sel('.pg-grid') + '{grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px;}',
+      /* ── Card image: proportional (was a fixed 185px) so it scales with the
+            variable auto-fill column width ── */
+      sel('.pg-grid .pc-img') + '{aspect-ratio:16/10;height:auto;}',
+      /* ── Tighter card body (grid mode; list mode overrides these to 0) ── */
+      sel('.pg-grid .pc-body') + '{padding:12px 14px 14px;}',
+      /* Title: 2-line clamp + fixed min-height so cards in a row align ── */
+      sel('.pc-t') + '{line-height:1.3;margin-bottom:4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.6em;}',
+      /* Location: single line, ellipsis ── */
+      sel('.pc-l') + '{margin-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
+      sel('.pg-grid .pc-specs') + '{margin-bottom:10px;}',
+      sel('.pg-grid .pc-foot') + '{padding-top:10px;}',
+      /* ── Touch targets (fitted to the compact design) ── */
+      sel('.lvb') + '{min-width:40px;height:40px;}',
+      sel('.yl-chip') + '{padding:9px 16px;min-height:40px;}',
+      sel('.sl-view-toggle button') + '{min-width:40px;min-height:40px;}',
+      /* ── Section spacing / vertical rhythm (k-lst-wrap = the YL/Saved scroll
+            wrappers, tagged in JS; !important beats their inline padding) ── */
+      '#page-listings .lst-grid-wrap{padding:16px 24px 24px;}',
+      '.k-lst-wrap{padding:16px 24px 24px !important;}',
+      '#page-listings .lst-featured-slideshow{margin:16px 24px 0;}',
+      /* ── Featured carousel polish: 44px arrows (AA touch target) with hover +
+            visible focus. (Dots are inline-styled spans built by the template
+            controller with no class, so they can\'t be safely restyled here
+            without breaking the active-dot indicator — left at 7px/22px.) ── */
+      '#page-listings .lss-arrow{width:44px;height:44px;background:rgba(255,255,255,.32);transition:background .15s;}',
+      '#page-listings .lss-arrow:hover{background:rgba(255,255,255,.5);}',
+      '#page-listings .lss-arrow:focus-visible{outline:2px solid #fff;outline-offset:2px;}',
+      /* ── Mobile: unify all three pages to a 2-up grid (today only View
+            Listings is 2-up; YL & Saved fall back to a cramped 3-up) ── */
+      '@media (max-width:820px){',
+      sel('.pg-grid') + '{grid-template-columns:repeat(2,1fr) !important;gap:10px !important;}',
+      /* keep images proportional on all three — a blanket .pc-img{height:180px}
+         mobile rule otherwise makes YL/Saved images portrait */
+      sel('.pg-grid .pc-img') + '{aspect-ratio:16/10;height:auto !important;}',
+      /* unify mobile side padding to the app\'s 14px */
+      '.k-lst-wrap, #page-listings .lst-grid-wrap{padding:16px 14px 24px !important;}',
+      /* keep carousel arrows a comfortable 40px on mobile (was 32px) */
+      '#page-listings .lss-arrow{width:40px;height:40px;}',
+      '}'
+    ].join('');
+    function inject(){
+      if (document.getElementById('k-listings-ui-css')) return;
+      if (!document.head) return;
+      var s = document.createElement('style'); s.id = 'k-listings-ui-css';
+      s.textContent = CSS;
+      document.head.appendChild(s);
+    }
+    // The Your Listings / Saved grid wrappers carry inline padding with no class,
+    // so tag them with .k-lst-wrap; the CSS above (with !important) normalizes
+    // their padding to match View Listings across breakpoints.
+    function normalizeWrappers(){
+      ['yl-grid','bookmarks-grid'].forEach(function(id){
+        var g = document.getElementById(id);
+        if (g && g.parentElement) g.parentElement.classList.add('k-lst-wrap');
+      });
+    }
+    function boot(){ inject(); normalizeWrappers(); }
+    boot();
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+    window.addEventListener('konek-bundler-done', boot);
+    var n = 0, iv = setInterval(function(){ n++; boot(); if (n > 60) clearInterval(iv); }, 100);
   })();
   </script>
 </body>

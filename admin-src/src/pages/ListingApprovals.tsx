@@ -52,6 +52,8 @@ function fullAddress(l: Listing): string {
     .join(', ');
 }
 
+const PENDING_SELECT = 'id, broker_id, title, category, property_type, price, region, province, city, barangay, street_address, lot_area_sqm, floor_area_sqm, bedrooms, bathrooms, amenities, description, images, status, rejection_reason, created_at, profiles!broker_id(first_name,last_name,phone,email,license_number), moa_agreements(id,status,signed_pdf_path,broker_signed_at)';
+
 export default function ListingApprovals() {
   const [rows, setRows] = useState<Listing[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -62,7 +64,7 @@ export default function ListingApprovals() {
   async function load(): Promise<Listing[] | null> {
     const { data, error } = await sb
       .from('listings')
-      .select('id, broker_id, title, category, property_type, price, region, province, city, barangay, street_address, lot_area_sqm, floor_area_sqm, bedrooms, bathrooms, amenities, description, images, status, rejection_reason, created_at, profiles!broker_id(first_name,last_name,phone,email,license_number), moa_agreements(id,status,signed_pdf_path,broker_signed_at)')
+      .select(PENDING_SELECT)
       .eq('status', 'pending')
       .order('created_at', { ascending: false });
     if (error) { setToast({ msg: error.message, err: true }); return null; }
@@ -99,10 +101,14 @@ export default function ListingApprovals() {
       return;
     }
     showToast('MOA sent to broker for signing.');
-    const next = await load();
-    // Use the freshly-loaded rows (not the stale closed-over `rows`) so the open
-    // details modal reflects the new "MOA sent" status immediately.
-    setViewing(v => (v && next ? next.find(r => r.id === v.id) ?? v : v));
+    // Refetch just the mutated row (not the whole pending list with per-row
+    // embeds) to refresh its MOA badge/buttons — mirrors ManageListings.sendMoa.
+    const { data } = await sb.from('listings').select(PENDING_SELECT).eq('id', l.id).maybeSingle();
+    if (data) {
+      const nl = data as unknown as Listing;
+      setRows(rs => rs?.map(r => (r.id === l.id ? nl : r)) ?? rs);
+      setViewing(v => (v && v.id === l.id ? nl : v));
+    }
   }
 
   async function viewSignedMoa(l: Listing) {

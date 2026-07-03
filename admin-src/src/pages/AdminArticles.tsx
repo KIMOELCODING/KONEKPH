@@ -43,7 +43,7 @@ export default function AdminArticles() {
   async function load() {
     const { data, error } = await sb
       .from('articles')
-      .select('id, type, title, body, image_url, is_trending, published_at, created_at')
+      .select('id, type, title, image_url, is_trending, published_at, created_at')
       .order('created_at', { ascending: false });
     if (error) { showToast(error.message, true); return; }
     setRows((data ?? []) as Article[]);
@@ -138,12 +138,17 @@ export default function AdminArticles() {
     setRows(rs => rs?.filter(r => r.id !== a.id) ?? rs);
   }
 
-  function startEdit(a: Article) {
+  async function startEdit(a: Article) {
+    // `body` (heavy rich-text HTML) is no longer in the list select, so fetch it
+    // just-in-time for the editor. Guard against opening with a blank body (which
+    // a save would then persist over the real content).
+    const { data, error } = await sb.from('articles').select('body').eq('id', a.id).maybeSingle();
+    if (error) { showToast(error.message, true); return; }
     setForm({
       id: a.id,
       type: a.type,
       title: a.title,
-      body: a.body ?? '',
+      body: ((data?.body as string | null) ?? ''),
       image_url: a.image_url ?? '',
       is_trending: a.is_trending,
       publish: a.published_at !== null,

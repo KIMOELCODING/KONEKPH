@@ -1196,6 +1196,11 @@ document.addEventListener('DOMContentLoaded', async function() {
     // This cuts Supabase egress when the user navigates frequently.
     var HOT_TTL  = 30 * 1000;
     var WARM_TTL = 5 * 60 * 1000;
+    // Light column set for VIEW-ONLY list/card/marketplace/bookmarks queries —
+    // drops the heavy `description` text + `amenities` array, which are shown only
+    // in the detail view (that re-fetches the full row via select('*')). NOT used
+    // for the broker's OWN listings query, whose full rows feed edit-form prefill.
+    window.LIST_COLS = 'id,broker_id,title,category,property_type,price,region,province,city,barangay,street_address,lot_area_sqm,floor_area_sqm,bedrooms,bathrooms,images,status,featured,created_at';
     window.__konekLoadData = async function(opts){
       if (!window.sb || !window.__currentUser) return;
       var force = !!(opts && opts.force);
@@ -1209,8 +1214,8 @@ document.addEventListener('DOMContentLoaded', async function() {
           var uid = window.__currentUser.id;
           var noop = Promise.resolve({ data: null, __skip: true });
           var results = await Promise.all([
-            hotStale  ? window.sb.from('listings').select('*').eq('status','active').order('created_at',{ascending:false}).limit(50) : noop,
-            hotStale  && uid ? window.sb.from('listings').select('*').eq('broker_id', uid).order('created_at',{ascending:false}) : noop,
+            hotStale  ? window.sb.from('listings').select(window.LIST_COLS).eq('status','active').order('created_at',{ascending:false}).limit(50) : noop,
+            hotStale  && uid ? window.sb.from('listings').select('*').eq('broker_id', uid).order('created_at',{ascending:false}).limit(200) : noop,
             hotStale  && uid ? window.sb.from('calendar_events').select('*').eq('user_id', uid) : noop,
             warmStale ? window.sb.from('articles').select('*').not('published_at','is',null).order('published_at',{ascending:false}).limit(30) : noop,
             warmStale ? window.sb.from('promoted_slides').select('*').order('sort_order',{ascending:true}) : noop,
@@ -4557,7 +4562,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       var minFloor = parseFloat(af.minFloor) || 0;
       var maxFloor = parseFloat(af.maxFloor) || 0;
 
-      var query = window.sb.from('listings').select('*').eq('status','active');
+      var query = window.sb.from('listings').select(window.LIST_COLS || '*').eq('status','active');
       // Server-side sort so price/popular order spans the whole catalog, not
       // just the loaded pages. created_at is the stable tiebreaker.
       if (lstSort === 'price-asc')       query = query.order('price',{ascending:true}).order('created_at',{ascending:false});
@@ -4592,7 +4597,11 @@ document.addEventListener('DOMContentLoaded', async function() {
       for (var i = 0; i < rows.length; i++) window.LST_FEED.push(rows[i]);
       lstOffset += rows.length;
       if (rows.length < lstPerPage) lstDone = true;
-      renderListings();
+      // Fresh filter/sort → full (re)build; pagination → append only the new
+      // page's cards so scrolling stays O(n) instead of re-rendering the whole
+      // accumulated feed on every page (was O(n²)).
+      if (reset) renderListings();
+      else appendListings(rows);
     }
 
     function showListingsLoading(){
@@ -4793,6 +4802,15 @@ document.addEventListener('DOMContentLoaded', async function() {
       data.forEach(function(p){ grid.appendChild(buildCard(p, { showSave:true })); });
       ensureInfiniteScroll(grid);
     }
+    // Append only the newly-fetched page's cards (infinite scroll). Falls back to
+    // a full render if the grid hasn't been populated yet (defensive).
+    function appendListings(rows){
+      var grid = document.getElementById('lst-grid');
+      if (!grid) return;
+      if (!grid.children || grid.children.length === 0){ renderListings(); return; }
+      rows.forEach(function(p){ grid.appendChild(buildCard(p, { showSave:true })); });
+      ensureInfiniteScroll(grid);
+    }
 
     // Append (or reposition) a sentinel after the grid and observe it; when it
     // scrolls into view we pull the next page. Observer is created once.
@@ -4889,7 +4907,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (renderBookmarks.__loading) return;
       renderBookmarks.__loading = true;
       try {
-        var res = await window.sb.from('listings').select('*').in('id', ids);
+        var res = await window.sb.from('listings').select(window.LIST_COLS || '*').in('id', ids);
         if (res.error) throw res.error;
         window.BOOKMARKS_DATA = (res.data || []).map(function(row){
           return (typeof window.mapListing === 'function') ? window.mapListing(row) : row;
@@ -4919,9 +4937,12 @@ document.addEventListener('DOMContentLoaded', async function() {
           return;
         }
         // Saves OF the broker's own listings feed the dashboard analytics
-        // (SAVES_TIMESERIES + Total Saves KPI). Force a refresh so a save/unsave
-        // is reflected there immediately rather than after the 30s hot cycle.
-        if (window.__konekLoadData) window.__konekLoadData({ force: true });
+        // (SAVES_TIMESERIES + Total Saves KPI). SAVED_IDS is already patched
+        // optimistically above, so only pay the full 14-query force-reload when
+        // the dashboard is actually on screen — every card tap was otherwise
+        // triggering an app-wide refetch.
+        var da = document.querySelector('#app-shell .page.active');
+        if (da && da.id === 'page-dashboard' && window.__konekLoadData) window.__konekLoadData({ force: true });
       });
     }
     // ---------- listing-detail Save button sync (Phase 3 #2) ----------

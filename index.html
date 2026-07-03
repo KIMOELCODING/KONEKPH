@@ -536,6 +536,21 @@ document.addEventListener('DOMContentLoaded', async function() {
       var tgt = (f.closest && f.closest('.af')) || f;
       if (tgt) tgt.classList.remove('field-err');
     };
+    // Existing-email signup: show a clear, friendly message with an actionable
+    // link straight to the sign-in tab (instead of a generic error string).
+    function showEmailExistsError(){
+      var el = document.getElementById('signup-error');
+      if (!el){ setErr('signup-error', 'An account with this email address already exists. Please sign in using your existing account.'); return; }
+      el.innerHTML = '<i class="fa-solid fa-circle-exclamation"></i>&nbsp;'
+        + '<span>An account with this email address already exists. Please sign in using your existing account. '
+        + '<a href="#" id="su-goto-signin" style="color:var(--gd,#3fa85f);font-weight:700;text-decoration:underline;cursor:pointer;">Sign in</a></span>';
+      el.classList.add('show');
+      var a = el.querySelector('#su-goto-signin');
+      if (a) a.addEventListener('click', function(ev){
+        ev.preventDefault();
+        if (typeof window.switchAuthTab === 'function') window.switchAuthTab('signin', null);
+      });
+    }
 
     window.doSignup = async function(){
       var fname = (document.getElementById('su-fname')||{}).value || '';
@@ -554,6 +569,9 @@ document.addEventListener('DOMContentLoaded', async function() {
       fname = fname.trim(); lname = lname.trim(); email = email.trim(); phone = phone.trim(); license = license.trim();
       if (!fname) { suErr('Please enter your first name.', 'su-fname'); return; }
       if (!email) { suErr('Please enter your email address.', 'su-email'); return; }
+      if (!(window.__plPhoneValid && window.__plPhoneValid(phone))) { suErr('Please enter your 10-digit mobile number (e.g. 917 123 4567).', 'su-phone'); return; }
+      // Store the phone canonically as +63XXXXXXXXXX once validated.
+      phone = (window.__plPhoneE164 ? window.__plPhoneE164(phone) : phone);
       if (!pw)    { suErr('Please choose a password.', 'su-pw'); return; }
       var pwErr = pwPolicyError(pw);
       if (pwErr) { suErr(pwErr, 'su-pw'); return; }
@@ -583,7 +601,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (r.error) {
           var msg = r.error.message || 'Signup failed.';
           if (/already registered|already exists|user_already_exists/i.test(msg)) {
-            setErr('signup-error', 'This email is already registered. Please sign in instead.');
+            showEmailExistsError();
             window.__pendingSignup = null; return;
           }
           setErr('signup-error', msg); window.__pendingSignup = null; return;
@@ -2467,6 +2485,8 @@ document.addEventListener('DOMContentLoaded', async function() {
           var newPhoto = ov5.querySelector('#k-ra-id-photo').files[0];
           var newPrc   = ov5.querySelector('#k-ra-prc-id').files[0];
           if (!fname || !lname) { errEl.textContent = 'First and last name are required.'; return; }
+          if (!(window.__plPhoneValid && window.__plPhoneValid(phone))) { errEl.textContent = 'Please enter your 10-digit mobile number (e.g. 917 123 4567).'; return; }
+          phone = (window.__plPhoneE164 ? window.__plPhoneE164(phone) : phone);
           if (license && license.length < 5) { errEl.textContent = 'PRC license number looks too short.'; return; }
           var MAX = 5 * 1024 * 1024;
           if (newPhoto && newPhoto.size > MAX) { errEl.textContent = '1×1 photo must be 5 MB or smaller.'; return; }
@@ -2515,7 +2535,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         var setVal = function(id, v){ var x = el.querySelector(id); if (x) x.value = v || ''; };
         setVal('#k-ra-fname', u.first_name);
         setVal('#k-ra-lname', u.last_name);
-        setVal('#k-ra-phone', u.phone);
+        setVal('#k-ra-phone', window.__plPhoneLocal ? window.__plPhoneLocal(u.phone) : u.phone);
         setVal('#k-ra-license', u.license_number);
         var errEl = el.querySelector('#k-reapply-error'); if (errEl) errEl.textContent = '';
         if (typeof window.showModal === 'function') { window.showModal('overlay-reapply'); return; }
@@ -7693,7 +7713,12 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (info) info.style.display = '';
       if (actions) actions.style.display = 'flex';
       if (nm) nm.textContent = conv.other_name;
-      if (meta) meta.textContent = conv.other_license ? 'PRC ' + conv.other_license : '';
+      // Privacy: never expose the peer's raw PRC number in Messages. Show the
+      // same credibility indicator the public property view uses (License
+      // Verified badge) when they have a license number on file.
+      if (meta) meta.innerHTML = conv.other_license
+        ? '<span style="display:inline-flex;align-items:center;gap:.25rem;color:var(--gd);font-weight:700;"><i class="fa-solid fa-circle-check" style="font-size:.625rem;"></i>License Verified</span>'
+        : '';
       if (composer) composer.style.display = '';
     }
 
@@ -8898,7 +8923,51 @@ document.addEventListener('DOMContentLoaded', async function() {
       sel.value = prev || '';
     }
 
-    function num(id){ var el = document.getElementById(id); var v = el ? parseFloat(el.value) : NaN; return isNaN(v) ? 0 : v; }
+    // Read the RAW number from a (possibly ₱/comma-formatted) display field so
+    // the query always uses the underlying value, not "₱10,000,000".
+    function num(id){ var el = document.getElementById(id); if (!el) return 0; var v = parseFloat(String(el.value).replace(/[^0-9.]/g, '')); return isNaN(v) ? 0 : v; }
+
+    // ── Thousands-separator display formatting for the range inputs ──────────
+    // Price fields show ₱ + commas (₱10,000,000); area fields show commas only
+    // (10,000). The paired range slider is kept in sync with the RAW number.
+    function fmtInt(raw, peso){
+      var d = String(raw == null ? '' : raw).replace(/[^0-9]/g, '').replace(/^0+(?=\d)/, '');
+      if (!d) return '';
+      return (peso ? '₱' : '') + d.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    }
+    var NUM_FIELDS = [
+      { id:'min-price-in', sl:'min-price-sl', peso:true  },
+      { id:'max-price-in', sl:'max-price-sl', peso:true  },
+      { id:'min-land-in',  sl:'min-land-sl',  peso:false },
+      { id:'max-land-in',  sl:'max-land-sl',  peso:false },
+      { id:'min-floor-in', sl:'min-floor-sl', peso:false },
+      { id:'max-floor-in', sl:'max-floor-sl', peso:false }
+    ];
+    function wireNumberFormatting(){
+      NUM_FIELDS.forEach(function(f){
+        var el = document.getElementById(f.id);
+        if (!el || el.__fmtWired) return;
+        el.__fmtWired = true;
+        // number inputs silently reject commas — switch to a numeric-keypad text
+        // field and drop the inline oninput handlers (they synced raw values and
+        // would fight our formatter).
+        el.type = 'text';
+        el.setAttribute('inputmode', 'numeric');
+        el.removeAttribute('oninput');
+        var sl = document.getElementById(f.sl);
+        if (sl) sl.removeAttribute('oninput');
+        if (el.value) el.value = fmtInt(el.value, f.peso);
+        el.addEventListener('input', function(){
+          var d = String(el.value).replace(/[^0-9]/g, '');
+          el.value = fmtInt(d, f.peso);
+          var s = document.getElementById(f.sl);
+          if (s) s.value = d || '0';
+        });
+        if (sl){
+          sl.addEventListener('input', function(){ el.value = fmtInt(sl.value, f.peso); });
+        }
+      });
+    }
 
     function apply(modal, refs){
       window.__konekAdvFilters = {
@@ -8955,6 +9024,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       populateCategory(refs.cat);
       populateProptype(refs.cat, refs.pt);
       populateRegion(refs.reg);
+      wireNumberFormatting();
       if (refs.cat && !refs.cat.__advWired){
         refs.cat.__advWired = true;
         refs.cat.addEventListener('change', function(){ populateProptype(refs.cat, refs.pt); });
@@ -10378,6 +10448,8 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (!fname) { fErr('Please enter your first name.', 'su-fname'); return false; }
       if (!email) { fErr('Please enter your email address.', 'su-email'); return false; }
       if (!EMAIL_RE.test(email)) { fErr('Please enter a valid email address.', 'su-email'); return false; }
+      var phone = val('su-phone').trim();
+      if (!(window.__plPhoneValid && window.__plPhoneValid(phone))) { fErr('Please enter your 10-digit mobile number (e.g. 917 123 4567).', 'su-phone'); return false; }
       if (!pw) { fErr('Please choose a password.', 'su-pw'); return false; }
       if (!(window.__plPwValid && window.__plPwValid(pw))) {
         var m = (typeof window.pwPolicyError === 'function' && window.pwPolicyError(pw)) || 'Password does not meet the requirements.';
@@ -11115,7 +11187,11 @@ document.addEventListener('DOMContentLoaded', async function() {
       var lk = document.getElementById('kmd-profile-link');
       if (av) av.src = (c && c.other_avatar) || '';
       if (nm) nm.textContent = (c && c.other_name) || '';
-      if (mt) mt.textContent = (c && c.other_license) ? ('PRC ' + c.other_license) : '';
+      // Privacy: hide the raw PRC number in the 3-dot details drawer too; show
+      // the License Verified indicator instead (matches the chat header).
+      if (mt) mt.innerHTML = (c && c.other_license)
+        ? '<span style="display:inline-flex;align-items:center;gap:.25rem;color:var(--gd);font-weight:700;"><i class="fa-solid fa-circle-check" style="font-size:.625rem;"></i>License Verified</span>'
+        : '';
       if (lk) lk.style.display = (c && c.other_id) ? '' : 'none';
     }
     function openChatDrawer(){
@@ -11254,6 +11330,147 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', inject);
     window.addEventListener('konek-bundler-done', inject);
     var n = 0, iv = setInterval(function(){ n++; inject(); if (n > 60) clearInterval(iv); }, 100);
+  })();
+  </script>
+
+  <!-- ==========================================================================
+       k-phone-ph — Philippine mobile-number input. Country code fixed as +63
+       (shown as a prefix chip; the user does NOT type it). The field accepts
+       exactly the 10 remaining digits: numeric-only, hard-capped at 10 (an 11th
+       digit physically cannot be entered) with a red error on blur when short —
+       mirrors the PRC 7-digit hard-cap in k-signup-extend. Stored canonically as
+       +63XXXXXXXXXX. Wires su-phone (signup) and k-ra-phone (reapply); the
+       profile phone field is display-only (locked) so it needs no validation.
+       Validators are exposed for the wizard/doSignup/reapply submit gates.
+       ========================================================================== -->
+  <script id="k-phone-ph">
+  (function(){
+    function digits(v){ return String(v == null ? '' : v).replace(/\D/g, ''); }
+    // Normalize any stored/pasted form (+63…, 63…, 09…, 9…) to the 10-digit local part.
+    function local(v){
+      var d = digits(v);
+      if (d.length > 10 && d.indexOf('63') === 0) d = d.slice(2);
+      if (d.length === 11 && d.charAt(0) === '0') d = d.slice(1);
+      return d.slice(-10);
+    }
+    window.__plPhoneLocal = local;
+    // Valid = exactly 10 digits in PH mobile format (always begins with 9 after +63).
+    window.__plPhoneValid = function(v){ return /^9\d{9}$/.test(digits(v)); };
+    window.__plPhoneE164  = function(v){ return /^9\d{9}$/.test(digits(v)) ? '+63' + digits(v) : ''; };
+
+    function ensurePrefix(input){
+      if (!input || input.__plPhoneCC) return;
+      var cc = document.createElement('span');
+      cc.className = 'pl-phone-cc';
+      cc.textContent = '+63';
+      cc.style.cssText = 'flex:0 0 auto;font-weight:700;white-space:nowrap;opacity:.85;';
+      var parent = input.parentNode;
+      if (parent && parent.classList && parent.classList.contains('af')){
+        // .af is already a flex row (icon + input) — drop the chip inline.
+        parent.insertBefore(cc, input);
+      } else {
+        // Plain input (e.g. reapply <label>): wrap it so the chip sits inline.
+        cc.style.color = 'var(--tm,#5a6b5a)';
+        var wrap = document.createElement('span');
+        wrap.style.cssText = 'display:flex;align-items:center;gap:.375rem;';
+        parent.insertBefore(wrap, input);
+        wrap.appendChild(cc); wrap.appendChild(input);
+        input.style.flex = '1'; input.style.minWidth = '0'; input.style.width = 'auto';
+      }
+      input.__plPhoneCC = cc;
+    }
+
+    function attach(input, fieldId){
+      if (!input || input.__plPhoneWired) return;
+      input.__plPhoneWired = true;
+      input.type = 'tel';
+      input.setAttribute('inputmode', 'numeric');
+      input.setAttribute('autocomplete', 'tel-national');
+      input.setAttribute('maxlength', '10');
+      input.placeholder = '9XX XXX XXXX';
+      ensurePrefix(input);
+      input.addEventListener('input', function(){
+        var d = digits(input.value).slice(0, 10);
+        if (d !== input.value) input.value = d;
+        if (fieldId && typeof window.__suClearErr === 'function') window.__suClearErr(fieldId);
+      });
+      input.addEventListener('blur', function(){
+        var v = digits(input.value);
+        if (v && !window.__plPhoneValid(v) && fieldId && typeof window.__suFieldErr === 'function'){
+          window.__suFieldErr('Please enter your 10-digit mobile number (e.g. 917 123 4567).', fieldId);
+        }
+      });
+    }
+    window.__plAttachPhone = attach;
+
+    function scan(){
+      var su = document.getElementById('su-phone'); if (su) attach(su, 'su-phone');
+      var ra = document.getElementById('k-ra-phone'); if (ra) attach(ra, null);
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', scan);
+    else scan();
+    window.addEventListener('konek-bundler-done', scan);
+    var n = 0, iv = setInterval(function(){ n++; scan(); if (n > 80) clearInterval(iv); }, 100);
+  })();
+  </script>
+
+  <!-- ==========================================================================
+       k-filt-tick — accessible filter checkboxes. The template's .filt-tick
+       chips (Services / Outdoor Spaces / Recreational Facilities / Security …)
+       previously only changed background colour. This gives them a real green
+       custom checkbox with a visible checkmark, a green selected chip state, and
+       clear hover + keyboard focus rings. The native <input type=checkbox> stays
+       the source of truth (keyboard-focusable, Space toggles) and the .sel class
+       mirrors it. Purely presentational — no query logic reads these ticks.
+       Self-reinjecting CSS + rescan (the bundler wipes appended tags).
+       ========================================================================== -->
+  <script id="k-filt-tick">
+  (function(){
+    var CSS = [
+      '.filt-tick{transition:background .15s,border-color .15s,color .15s,box-shadow .15s;}',
+      '.filt-tick:hover{border-color:var(--gd);background:rgba(234,245,238,.55);}',
+      '.filt-tick:focus-within{outline:2px solid var(--gd);outline-offset:1px;}',
+      '.filt-tick.sel{background:rgba(234,245,238,.9);border-color:var(--gd);color:var(--gd);font-weight:600;box-shadow:inset 0 0 0 1px rgba(63,168,95,.35);}',
+      '.filt-tick input[type=checkbox]{appearance:none;-webkit-appearance:none;width:1rem;height:1rem;margin:0;border:1.5px solid var(--br,#c3d3c6);border-radius:5px;background:#fff;cursor:pointer;position:relative;flex-shrink:0;transition:background .15s,border-color .15s;}',
+      '.filt-tick input[type=checkbox]:hover{border-color:var(--gd);}',
+      '.filt-tick input[type=checkbox]:checked{background:var(--gd);border-color:var(--gd);}',
+      '.filt-tick input[type=checkbox]:checked::after{content:"";position:absolute;left:.28rem;top:.09rem;width:.28rem;height:.5rem;border:solid #fff;border-width:0 .125rem .125rem 0;transform:rotate(45deg);}',
+      '.filt-tick input[type=checkbox]:focus-visible{outline:2px solid var(--gd);outline-offset:2px;}'
+    ].join('');
+    function injectCss(){
+      if (!document.head) return;
+      var ex = document.getElementById('k-filt-tick-css');
+      if (ex){ if (ex.textContent !== CSS) ex.textContent = CSS; return; }
+      var s = document.createElement('style'); s.id = 'k-filt-tick-css';
+      s.textContent = CSS; document.head.appendChild(s);
+    }
+    function wireTick(t){
+      if (t.__tickWired) return;
+      var cb = t.querySelector('input[type=checkbox]');
+      if (!cb) return;                     // not a checkbox chip — leave alone
+      t.__tickWired = true;
+      // Drop the template's inline onclick double-toggles; use one clean handler
+      // with the checkbox as the single source of truth.
+      t.removeAttribute('onclick');
+      cb.removeAttribute('onclick');
+      t.classList.toggle('sel', cb.checked);
+      cb.addEventListener('change', function(){ t.classList.toggle('sel', cb.checked); });
+      t.addEventListener('click', function(ev){
+        if (ev.target === cb) return;      // native toggle → change handler syncs
+        ev.preventDefault();
+        cb.checked = !cb.checked;
+        cb.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    }
+    function scan(){
+      injectCss();
+      var ticks = document.querySelectorAll('.filt-tick');
+      for (var i = 0; i < ticks.length; i++) wireTick(ticks[i]);
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', scan);
+    else scan();
+    window.addEventListener('konek-bundler-done', scan);
+    var n = 0, iv = setInterval(function(){ n++; scan(); if (n > 80) clearInterval(iv); }, 100);
   })();
   </script>
 </body>

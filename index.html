@@ -7437,6 +7437,9 @@ document.addEventListener('DOMContentLoaded', async function() {
           other_name: otherName,
           other_license: (other && other.license_number) || '',
           other_avatar: resolveAv(other && other.avatar_url, otherName),
+          // Raw storage path/URL (already selected) so the photo viewer can
+          // resolve a full-size image; other_avatar is only a 96px thumbnail.
+          other_avatar_raw: (other && other.avatar_url) || '',
           last_message_at: r.last_message_at,
           last_message_preview: r.last_message_preview || '',
           last_read_at: state.last_read_at || null,
@@ -7536,6 +7539,12 @@ document.addEventListener('DOMContentLoaded', async function() {
             '<div id="kmsg-hdr-name" style="font-size:14px;font-weight:700;color:var(--td);"></div>' +
             '<div id="kmsg-hdr-meta" style="font-size:11px;color:var(--tl);"></div>' +
           '</div>' +
+          // Right-side header actions (shown only when a conversation is open).
+          // Search is a Phase-C placeholder; the 3-dot opens the details drawer.
+          '<div id="kmsg-hdr-actions" style="display:none;align-items:center;gap:6px;flex-shrink:0;">' +
+            '<button id="kmsg-search-btn" type="button" title="Search (coming soon)" aria-label="Search conversation" style="width:36px;height:36px;border:none;border-radius:50%;background:rgba(255,255,255,.55);color:var(--tm);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:14px;"><i class="fa-solid fa-magnifying-glass"></i></button>' +
+            '<button id="kmsg-menu-btn" type="button" title="Details" aria-label="Conversation details" style="width:36px;height:36px;border:none;border-radius:50%;background:rgba(255,255,255,.55);color:var(--tm);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:15px;"><i class="fa-solid fa-ellipsis-vertical"></i></button>' +
+          '</div>' +
         '</div>' +
         '<div id="kmsg-body" style="flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:2px;background:rgba(255,255,255,.35);"></div>' +
         '<div id="kmsg-composer" style="padding:12px 14px;border-top:1px solid rgba(210,224,215,.4);background:rgba(255,255,255,.6);display:none;flex-shrink:0;">' +
@@ -7557,14 +7566,28 @@ document.addEventListener('DOMContentLoaded', async function() {
       });
       // Broadcast a throttled "typing" ping to the other participant.
       input.addEventListener('input', sendTyping);
+
+      // Header actions: search (Phase-C placeholder) + 3-dot details drawer.
+      var searchBtn = overlay.querySelector('#kmsg-search-btn');
+      if (searchBtn) searchBtn.addEventListener('click', function(){
+        if (typeof window.showToast === 'function') window.showToast('In-conversation search is coming soon');
+      });
+      var menuBtn = overlay.querySelector('#kmsg-menu-btn');
+      if (menuBtn) menuBtn.addEventListener('click', function(){
+        if (typeof window.openChatDrawer === 'function') window.openChatDrawer();
+      });
       return panel;
     }
 
     function showPanelHeader(conv){
       ensurePanelLayout();
+      // Expose the active conversation so the details drawer + photo viewer
+      // (in the k-chat-drawer block) can read name/avatar/license on demand.
+      window.__kmsgActiveConv = conv || null;
       var emptyHdr = document.getElementById('kmsg-hdr-empty');
       var av       = document.getElementById('kmsg-hdr-av');
       var info     = document.getElementById('kmsg-hdr-info');
+      var actions  = document.getElementById('kmsg-hdr-actions');
       var nm       = document.getElementById('kmsg-hdr-name');
       var meta     = document.getElementById('kmsg-hdr-meta');
       var composer = document.getElementById('kmsg-composer');
@@ -7572,6 +7595,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (emptyHdr) emptyHdr.style.display = '';
         if (av)       av.style.display = 'none';
         if (info)     info.style.display = 'none';
+        if (actions)  actions.style.display = 'none';
         if (composer) composer.style.display = 'none';
         var body = document.getElementById('kmsg-body');
         if (body) body.innerHTML = '';
@@ -7580,15 +7604,15 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (emptyHdr) emptyHdr.style.display = 'none';
       if (av){
         av.src = conv.other_avatar; av.style.display = '';
-        // Clicking the broker's picture opens their profile.
-        av.style.cursor = 'pointer'; av.title = 'View broker profile';
+        // Clicking the broker's picture opens the fullscreen photo viewer
+        // (broker profile is reachable via the drawer's "View full profile").
+        av.style.cursor = 'pointer'; av.title = 'View photo';
         av.onclick = function(){
-          if (conv.other_id) window.__konekDetailBrokerId = conv.other_id;
-          if (typeof window.openBrokerProfile === 'function') return window.openBrokerProfile();
-          if (typeof window.goTo === 'function') window.goTo('broker');
+          if (typeof window.openProfileViewer === 'function') return window.openProfileViewer(conv);
         };
       }
       if (info) info.style.display = '';
+      if (actions) actions.style.display = 'flex';
       if (nm) nm.textContent = conv.other_name;
       if (meta) meta.textContent = conv.other_license ? 'PRC ' + conv.other_license : '';
       if (composer) composer.style.display = '';
@@ -10806,6 +10830,259 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', inject);
     window.addEventListener('konek-bundler-done', inject);
     var n = 0, iv = setInterval(function(){ n++; inject(); if (n > 60) clearInterval(iv); }, 100);
+  })();
+  </script>
+
+  <!-- ==========================================================================
+       k-chat-drawer — Messages/Chat Phase B SHELL: the 3-dot details drawer and
+       the fullscreen profile-image viewer. Structure + open/close only; drawer
+       Media/Actions/Privacy sections are labeled placeholders (later phases).
+       Chat Info is real (name/PRC/avatar + "View full profile"). No data layer,
+       no new queries. CSS injected into <head> and DOM appended to <body>, both
+       re-built on konek-bundler-done (the bundler's documentElement.replaceWith
+       wipes them). Exposes window.openChatDrawer/closeChatDrawer/openProfileViewer.
+       ========================================================================== -->
+  <script id="k-chat-drawer">
+  (function(){
+    var CSS = [
+      '#kmsg-drawer-scrim{position:fixed;inset:0;background:rgba(8,20,12,.45);backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);z-index:955;opacity:0;pointer-events:none;transition:opacity .26s ease;}',
+      '#kmsg-drawer-scrim.show{opacity:1;pointer-events:auto;}',
+      '#kmsg-drawer{position:fixed;top:0;right:0;height:100dvh;width:min(340px,86vw);background:rgba(255,255,255,.92);backdrop-filter:blur(20px) saturate(180%);-webkit-backdrop-filter:blur(20px) saturate(180%);border-left:1px solid rgba(255,255,255,.7);box-shadow:-6px 0 44px rgba(0,0,0,.22);z-index:960;transform:translateX(100%);transition:transform .26s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column;overflow:hidden;}',
+      '#kmsg-drawer.open{transform:none;}',
+      '#kmsg-drawer .kmd-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid rgba(210,224,215,.4);flex-shrink:0;}',
+      '#kmsg-drawer .kmd-head-title{font-size:15px;font-weight:800;color:var(--td);}',
+      '.kmd-icon-btn{width:36px;height:36px;border:none;border-radius:50%;background:rgba(255,255,255,.55);color:var(--tm);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:15px;}',
+      '.kmd-icon-btn:hover{background:rgba(234,245,238,.9);}',
+      '#kmsg-drawer .kmd-body{flex:1;overflow-y:auto;padding:8px 18px 18px;}',
+      '.kmd-label{font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--tl);margin:18px 0 8px;}',
+      '.kmd-info{display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px;padding:14px 0 4px;}',
+      '.kmd-info-av{width:72px;height:72px;border-radius:50%;object-fit:cover;cursor:pointer;box-shadow:var(--sh);background:rgba(0,0,0,.04);}',
+      '.kmd-info-name{font-size:16px;font-weight:800;color:var(--td);}',
+      '.kmd-info-meta{font-size:12px;color:var(--tl);}',
+      '.kmd-profile-link{margin-top:8px;font-size:12.5px;font-weight:700;color:var(--gd);background:rgba(234,245,238,.8);border:1px solid rgba(208,235,216,.6);border-radius:10px;padding:9px 14px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;}',
+      '.kmd-profile-link:hover{background:rgba(234,245,238,1);}',
+      '.kmd-tabs{display:flex;gap:4px;background:rgba(234,245,238,.5);border-radius:10px;padding:3px;margin-bottom:10px;}',
+      '.kmd-tab{flex:1;border:none;background:transparent;font:600 12px Inter,sans-serif;color:var(--ts);padding:7px 6px;border-radius:8px;cursor:pointer;}',
+      '.kmd-tab.active{background:#fff;color:var(--gd);box-shadow:var(--sh);}',
+      '.kmd-empty{text-align:center;color:var(--tl);font-size:12px;padding:22px 10px;}',
+      '.kmd-empty i{display:block;font-size:22px;margin-bottom:8px;opacity:.6;}',
+      '.kmd-row{display:flex;align-items:center;gap:12px;min-height:44px;padding:8px 6px;border-radius:10px;color:var(--tm);font-size:13px;}',
+      '.kmd-row .kmd-row-ic{width:20px;text-align:center;color:var(--ts);}',
+      '.kmd-row .kmd-row-lbl{flex:1;}',
+      '.kmd-row .kmd-row-chev{color:var(--tl);font-size:12px;}',
+      '.kmd-row.disabled{opacity:.55;cursor:default;}',
+      '.kmd-row.enabled{cursor:pointer;}',
+      '.kmd-row.enabled:hover{background:rgba(234,245,238,.6);}',
+      '#kmsg-photo-viewer .kpv-img{max-width:92vw;max-height:84vh;object-fit:contain;transition:transform .2s ease;transform-origin:center center;user-select:none;-webkit-user-drag:none;}',
+      '#kmsg-photo-viewer .kpv-toolbar{position:absolute;bottom:22px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;background:rgba(0,0,0,.42);border-radius:999px;padding:8px 14px;}',
+      '#kmsg-photo-viewer .kpv-btn{width:40px;height:40px;border:none;border-radius:50%;background:rgba(255,255,255,.15);color:#fff;cursor:pointer;font-size:15px;display:inline-flex;align-items:center;justify-content:center;}',
+      '#kmsg-photo-viewer .kpv-btn:hover{background:rgba(255,255,255,.3);}',
+      '#kmsg-photo-viewer .kpv-zoom{color:#fff;font-size:12px;min-width:44px;text-align:center;}',
+      '#kmsg-photo-viewer .kpv-close{position:absolute;top:18px;right:18px;}'
+    ].join('');
+
+    function injectCss(){
+      if (document.getElementById('k-chat-drawer-css')) return;
+      if (!document.head) return;
+      var s = document.createElement('style'); s.id = 'k-chat-drawer-css';
+      s.textContent = CSS;
+      document.head.appendChild(s);
+    }
+
+    // ---- placeholder row helper ----
+    function row(icon, label, opts){
+      opts = opts || {};
+      var r = document.createElement('div');
+      r.className = 'kmd-row ' + (opts.enabled ? 'enabled' : 'disabled');
+      if (opts.title) r.title = opts.title;
+      r.innerHTML = '<span class="kmd-row-ic"><i class="fa-solid ' + icon + '"></i></span>' +
+                    '<span class="kmd-row-lbl">' + label + '</span>' +
+                    '<span class="kmd-row-chev"><i class="fa-solid fa-chevron-right"></i></span>';
+      if (opts.enabled && opts.onClick) r.addEventListener('click', opts.onClick);
+      return r;
+    }
+
+    function buildDrawer(){
+      if (document.getElementById('kmsg-drawer')) return;
+      if (!document.body) return;
+
+      var scrim = document.createElement('div');
+      scrim.id = 'kmsg-drawer-scrim';
+      scrim.addEventListener('click', closeChatDrawer);
+      document.body.appendChild(scrim);
+
+      var d = document.createElement('div');
+      d.id = 'kmsg-drawer';
+      d.setAttribute('role', 'dialog');
+      d.setAttribute('aria-label', 'Conversation details');
+      d.innerHTML =
+        '<div class="kmd-head">' +
+          '<span class="kmd-head-title">Details</span>' +
+          '<button class="kmd-icon-btn" id="kmd-close" type="button" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>' +
+        '</div>' +
+        '<div class="kmd-body">' +
+          // Chat Info — REAL
+          '<div class="kmd-info">' +
+            '<img class="kmd-info-av" id="kmd-info-av" alt="">' +
+            '<div class="kmd-info-name" id="kmd-info-name"></div>' +
+            '<div class="kmd-info-meta" id="kmd-info-meta"></div>' +
+            '<button class="kmd-profile-link" id="kmd-profile-link" type="button"><i class="fa-solid fa-user"></i> View full profile</button>' +
+          '</div>' +
+          // Media — PLACEHOLDER (tabs switch active only; no data this phase)
+          '<div class="kmd-label">Media</div>' +
+          '<div class="kmd-tabs" id="kmd-media-tabs">' +
+            '<button class="kmd-tab active" type="button" data-tab="photos">Photos</button>' +
+            '<button class="kmd-tab" type="button" data-tab="videos">Videos</button>' +
+            '<button class="kmd-tab" type="button" data-tab="files">Files</button>' +
+            '<button class="kmd-tab" type="button" data-tab="links">Links</button>' +
+          '</div>' +
+          '<div class="kmd-empty" id="kmd-media-empty"><i class="fa-regular fa-images"></i>No photos yet<div style="opacity:.8;margin-top:2px;">Coming soon</div></div>' +
+          // Chat Actions — PLACEHOLDER (no persistence yet)
+          '<div class="kmd-label">Chat Actions</div>' +
+          '<div id="kmd-actions"></div>' +
+          // Privacy & Support — PLACEHOLDER
+          '<div class="kmd-label">Privacy &amp; Support</div>' +
+          '<div id="kmd-privacy"></div>' +
+        '</div>';
+      document.body.appendChild(d);
+
+      d.querySelector('#kmd-close').addEventListener('click', closeChatDrawer);
+      d.querySelector('#kmd-info-av').addEventListener('click', function(){
+        if (typeof window.openProfileViewer === 'function') window.openProfileViewer(window.__kmsgActiveConv);
+      });
+      d.querySelector('#kmd-profile-link').addEventListener('click', function(){
+        var c = window.__kmsgActiveConv;
+        if (c && c.other_id) window.__konekDetailBrokerId = c.other_id;
+        closeChatDrawer();
+        if (typeof window.openBrokerProfile === 'function') window.openBrokerProfile();
+        else if (typeof window.goTo === 'function') window.goTo('broker');
+      });
+      // Media tabs — visual active-state only; each shows the same empty state.
+      var tabWrap = d.querySelector('#kmd-media-tabs');
+      var emptyEl = d.querySelector('#kmd-media-empty');
+      var EMPTY = { photos:['fa-regular fa-images','No photos yet'], videos:['fa-regular fa-circle-play','No videos yet'], files:['fa-regular fa-file','No files yet'], links:['fa-solid fa-link','No links yet'] };
+      tabWrap.querySelectorAll('.kmd-tab').forEach(function(t){
+        t.addEventListener('click', function(){
+          tabWrap.querySelectorAll('.kmd-tab').forEach(function(x){ x.classList.remove('active'); });
+          t.classList.add('active');
+          var e = EMPTY[t.getAttribute('data-tab')] || EMPTY.photos;
+          emptyEl.innerHTML = '<i class="' + e[0] + '"></i>' + e[1] + '<div style="opacity:.8;margin-top:2px;">Coming soon</div>';
+        });
+      });
+      // Chat Actions rows (disabled placeholders)
+      var acts = d.querySelector('#kmd-actions');
+      acts.appendChild(row('fa-thumbtack', 'Pinned Messages', { title:'Coming soon' }));
+      acts.appendChild(row('fa-bell-slash', 'Mute', { title:'Coming soon' }));
+      acts.appendChild(row('fa-bell', 'Notifications', { title:'Coming soon' }));
+      acts.appendChild(row('fa-volume-high', 'Sounds', { title:'Coming soon' }));
+      // Privacy & Support rows (disabled placeholders; Report-User needs its own
+      // schema — cannot reuse listing_reports, which is listing-scoped)
+      var priv = d.querySelector('#kmd-privacy');
+      priv.appendChild(row('fa-flag', 'Report User', { title:'Coming soon' }));
+      priv.appendChild(row('fa-shield-halved', 'Privacy', { title:'Coming soon' }));
+      priv.appendChild(row('fa-circle-question', 'Help', { title:'Coming soon' }));
+    }
+
+    function buildViewer(){
+      if (document.getElementById('kmsg-photo-viewer')) return;
+      if (!document.body) return;
+      var v = document.createElement('div');
+      v.id = 'kmsg-photo-viewer';
+      v.className = 'overlay';
+      // Above the drawer; own dark scrim. .overlay gives display/.show + centering.
+      v.style.zIndex = '9000';
+      v.style.background = 'rgba(8,20,12,.85)';
+      v.innerHTML =
+        '<img class="kpv-img" id="kpv-img" alt="Profile photo">' +
+        '<button class="kmd-icon-btn kpv-btn kpv-close" id="kpv-close" type="button" aria-label="Close" style="background:rgba(255,255,255,.15);color:#fff;"><i class="fa-solid fa-xmark"></i></button>' +
+        '<div class="kpv-toolbar">' +
+          '<button class="kpv-btn" id="kpv-out" type="button" aria-label="Zoom out"><i class="fa-solid fa-minus"></i></button>' +
+          '<span class="kpv-zoom" id="kpv-zoom">100%</span>' +
+          '<button class="kpv-btn" id="kpv-in" type="button" aria-label="Zoom in"><i class="fa-solid fa-plus"></i></button>' +
+        '</div>';
+      document.body.appendChild(v);
+
+      var img = v.querySelector('#kpv-img');
+      var zlabel = v.querySelector('#kpv-zoom');
+      var scale = 1;
+      function apply(){ img.style.transform = 'scale(' + scale + ')'; zlabel.textContent = Math.round(scale*100) + '%'; }
+      window.__kpvReset = function(){ scale = 1; apply(); };
+      v.querySelector('#kpv-in').addEventListener('click', function(){ scale = Math.min(4, scale + 0.5); apply(); });
+      v.querySelector('#kpv-out').addEventListener('click', function(){ scale = Math.max(1, scale - 0.5); apply(); });
+      v.querySelector('#kpv-close').addEventListener('click', closeProfileViewer);
+      // Backdrop click (outside the image/toolbar/close) closes.
+      v.addEventListener('click', function(ev){ if (ev.target === v) closeProfileViewer(); });
+    }
+
+    // ---- open/close API ----
+    function fillInfo(c){
+      var av = document.getElementById('kmd-info-av');
+      var nm = document.getElementById('kmd-info-name');
+      var mt = document.getElementById('kmd-info-meta');
+      var lk = document.getElementById('kmd-profile-link');
+      if (av) av.src = (c && c.other_avatar) || '';
+      if (nm) nm.textContent = (c && c.other_name) || '';
+      if (mt) mt.textContent = (c && c.other_license) ? ('PRC ' + c.other_license) : '';
+      if (lk) lk.style.display = (c && c.other_id) ? '' : 'none';
+    }
+    function openChatDrawer(){
+      buildDrawer();
+      fillInfo(window.__kmsgActiveConv);
+      var d = document.getElementById('kmsg-drawer');
+      var s = document.getElementById('kmsg-drawer-scrim');
+      if (s) s.classList.add('show');
+      if (d) d.classList.add('open');
+    }
+    function closeChatDrawer(){
+      var d = document.getElementById('kmsg-drawer');
+      var s = document.getElementById('kmsg-drawer-scrim');
+      if (d) d.classList.remove('open');
+      if (s) s.classList.remove('show');
+    }
+    function fullAvatarSrc(c){
+      if (!c) return '';
+      var raw = c.other_avatar_raw;
+      if (raw){
+        if (raw.indexOf('data:') === 0 || raw.indexOf('http') === 0) return raw;
+        if (typeof window.__plImg === 'function'){ var u = window.__plImg('avatars', raw); if (u) return u; }
+      }
+      // fall back to the (thumbnail or generated-SVG) avatar already resolved
+      return c.other_avatar || '';
+    }
+    function openProfileViewer(c){
+      buildViewer();
+      var img = document.getElementById('kpv-img');
+      if (img) img.src = fullAvatarSrc(c);
+      if (window.__kpvReset) window.__kpvReset();
+      if (typeof window.showModal === 'function') window.showModal('kmsg-photo-viewer');
+      else { var v = document.getElementById('kmsg-photo-viewer'); if (v) v.classList.add('show'); }
+    }
+    function closeProfileViewer(){
+      if (typeof window.closeModal === 'function') window.closeModal('kmsg-photo-viewer');
+      else { var v = document.getElementById('kmsg-photo-viewer'); if (v) v.classList.remove('show'); }
+    }
+    function viewerOpen(){ var v = document.getElementById('kmsg-photo-viewer'); return v && v.classList.contains('show'); }
+    function drawerOpen(){ var d = document.getElementById('kmsg-drawer'); return d && d.classList.contains('open'); }
+
+    window.openChatDrawer = openChatDrawer;
+    window.closeChatDrawer = closeChatDrawer;
+    window.openProfileViewer = openProfileViewer;
+
+    // One global Esc handler: viewer first, then drawer.
+    if (!window.__kmsgEscBound){
+      window.__kmsgEscBound = true;
+      document.addEventListener('keydown', function(ev){
+        if (ev.key !== 'Escape' && ev.key !== 'Esc') return;
+        if (viewerOpen()) closeProfileViewer();
+        else if (drawerOpen()) closeChatDrawer();
+      });
+    }
+
+    function boot(){ injectCss(); buildDrawer(); buildViewer(); }
+    boot();
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+    window.addEventListener('konek-bundler-done', boot);
+    var n = 0, iv = setInterval(function(){ n++; boot(); if (n > 60) clearInterval(iv); }, 100);
   })();
   </script>
 </body>

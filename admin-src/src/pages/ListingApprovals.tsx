@@ -122,23 +122,28 @@ export default function ListingApprovals() {
     }
     setBusy(l.id);
     const { data: { user } } = await sb.auth.getUser();
-    const { error } = await sb
+    const { data, error } = await sb
       .from('listings')
       .update({ status: 'active', approved_at: new Date().toISOString(), approved_by: user?.id })
-      .eq('id', l.id);
-    if (!error) {
-      await sb.from('notifications').insert({
-        user_id: l.broker_id,
-        type: 'listing_approved',
-        title: 'Listing approved',
-        body: `${l.title} is now live on ProList.`,
-      });
-      sb.functions.invoke('notify-broker', {
-        body: { broker_id: l.broker_id, action: 'listing_approved', listing_id: l.id },
-      }).catch(e => console.warn('notify-broker (listing_approved) failed:', e));
+      .eq('id', l.id)
+      .select('id');
+    if (error) { setBusy(null); showToast(error.message, true); return; }
+    if (!data || data.length === 0) {
+      setBusy(null);
+      showToast('Update blocked by RLS — confirm your account has role=admin in profiles.', true);
+      return;
     }
+    await sb.from('notifications').insert({
+      user_id: l.broker_id,
+      type: 'listing_approved',
+      title: 'Listing approved',
+      body: `${l.title} is now live on ProList.`,
+    });
+    sb.functions.invoke('notify-broker', {
+      body: { broker_id: l.broker_id, action: 'listing_approved', listing_id: l.id },
+    }).then(({ error: mailErr }) => { if (mailErr) showToast('Listing approved, but the broker email could not be sent.', true); })
+      .catch(() => showToast('Listing approved, but the broker email could not be sent.', true));
     setBusy(null);
-    if (error) { showToast(error.message, true); return; }
     showToast('Listing approved.');
     setViewing(v => v?.id === l.id ? null : v);
     setRows(rs => rs?.filter(r => r.id !== l.id) ?? rs);
@@ -146,29 +151,35 @@ export default function ListingApprovals() {
 
   async function confirmReject(l: Listing, reason: string) {
     setBusy(l.id);
-    const { error } = await sb
+    const { data, error } = await sb
       .from('listings')
       .update({ status: 'rejected', rejection_reason: reason })
-      .eq('id', l.id);
-    if (!error) {
-      await sb.from('notifications').insert({
-        user_id: l.broker_id,
-        type: 'listing_rejected',
-        title: 'Listing rejected',
-        body: `${l.title}: ${reason}`,
-      });
-      sb.functions.invoke('notify-broker', {
-        body: {
-          broker_id: l.broker_id,
-          action: 'listing_rejected',
-          listing_id: l.id,
-          reason,
-        },
-      }).catch(e => console.warn('notify-broker (listing_rejected) failed:', e));
+      .eq('id', l.id)
+      .select('id');
+    if (error) { setBusy(null); setRejecting(null); showToast(error.message, true); return; }
+    if (!data || data.length === 0) {
+      setBusy(null);
+      setRejecting(null);
+      showToast('Update blocked by RLS — confirm your account has role=admin in profiles.', true);
+      return;
     }
+    await sb.from('notifications').insert({
+      user_id: l.broker_id,
+      type: 'listing_rejected',
+      title: 'Listing rejected',
+      body: `${l.title}: ${reason}`,
+    });
+    sb.functions.invoke('notify-broker', {
+      body: {
+        broker_id: l.broker_id,
+        action: 'listing_rejected',
+        listing_id: l.id,
+        reason,
+      },
+    }).then(({ error: mailErr }) => { if (mailErr) showToast('Listing rejected, but the broker email could not be sent.', true); })
+      .catch(() => showToast('Listing rejected, but the broker email could not be sent.', true));
     setBusy(null);
     setRejecting(null);
-    if (error) { showToast(error.message, true); return; }
     showToast('Listing rejected.');
     setViewing(v => v?.id === l.id ? null : v);
     setRows(rs => rs?.filter(r => r.id !== l.id) ?? rs);

@@ -57,12 +57,15 @@ export default function Reports() {
     setTimeout(() => setToast(null), 2800);
   }
 
-  async function markReviewed(r: Report, status: 'resolved' | 'dismissed', adminId?: string) {
-    const { error } = await sb
+  async function markReviewed(r: Report, status: 'resolved' | 'dismissed', adminId?: string): Promise<{ message: string } | null> {
+    const { data, error } = await sb
       .from('listing_reports')
       .update({ status, reviewed_by: adminId, reviewed_at: new Date().toISOString() })
-      .eq('id', r.id);
-    return error;
+      .eq('id', r.id)
+      .select('id');
+    if (error) return error;
+    if (!data || data.length === 0) return { message: 'Update blocked by RLS — confirm your account has role=admin in profiles.' };
+    return null;
   }
 
   // Take the reported listing down: set it to 'rejected' (disappears from the
@@ -74,11 +77,17 @@ export default function Reports() {
     setBusy(r.id);
     const { data: { user } } = await sb.auth.getUser();
 
-    const { error: listErr } = await sb
+    const { data: listData, error: listErr } = await sb
       .from('listings')
       .update({ status: 'rejected', rejection_reason: reason })
-      .eq('id', listing.id);
+      .eq('id', listing.id)
+      .select('id');
     if (listErr) { setBusy(null); setTakingDown(null); showToast(listErr.message, true); return; }
+    if (!listData || listData.length === 0) {
+      setBusy(null); setTakingDown(null);
+      showToast('Update blocked by RLS — confirm your account has role=admin in profiles.', true);
+      return;
+    }
 
     await sb.from('notifications').insert({
       user_id: listing.broker_id,
@@ -88,7 +97,8 @@ export default function Reports() {
     });
     sb.functions.invoke('notify-broker', {
       body: { broker_id: listing.broker_id, action: 'listing_rejected', listing_id: listing.id, reason },
-    }).catch(e => console.warn('notify-broker (listing_rejected) failed:', e));
+    }).then(({ error: mailErr }) => { if (mailErr) showToast('Listing taken down, but the broker email could not be sent.', true); })
+      .catch(() => showToast('Listing taken down, but the broker email could not be sent.', true));
 
     const repErr = await markReviewed(r, 'resolved', user?.id);
     setBusy(null);

@@ -48,9 +48,10 @@ export default function BrokerApprovals() {
 
   async function approve(p: Profile) {
     setBusy(p.id);
+    const { data: { user } } = await sb.auth.getUser();
     const { data, error } = await sb
       .from('profiles')
-      .update({ is_approved: true, approved_at: new Date().toISOString(), subscription_status: 'pending_approval' })
+      .update({ is_approved: true, approved_at: new Date().toISOString(), approved_by: user?.id, subscription_status: 'pending_approval' })
       .eq('id', p.id)
       .select();
     if (error) { setBusy(null); showToast(error.message, true); return; }

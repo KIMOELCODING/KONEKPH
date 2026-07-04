@@ -844,20 +844,20 @@ document.addEventListener('DOMContentLoaded', async function() {
       var s = document.createElement('style');
       s.id = 'k-signup-extend-style';
       s.textContent =
-        '.su-file-row{display:flex;flex-direction:column;gap:.1875rem;margin:.1875rem 0;text-align:left}' +
+        '.su-file-row{display:flex;flex-direction:column;gap:.375rem;margin:.6875rem 0;text-align:left}' +
         '.su-file-row > label{font-size:.75rem;color:rgba(255,255,255,0.85);font-weight:500;letter-spacing:.02em}' +
         '.su-file-row > input[type=file]{font-size:.8125rem;color:rgba(255,255,255,0.9);padding:.375rem;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.25);border-radius:8px;cursor:pointer}' +
         '.su-file-row > input[type=file]::file-selector-button{margin-right:.625rem;padding:.375rem .75rem;border:0;border-radius:6px;background:rgba(255,255,255,0.18);color:#fff;font-size:.75rem;font-weight:600;cursor:pointer}' +
-        '.su-tos{margin:.625rem 0 .25rem;text-align:left}' +
-        '.su-tos-body{max-height:7.5rem;overflow-y:auto;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.25);border-radius:8px;padding:.625rem .75rem;font-size:.75rem;line-height:1.5;color:rgba(255,255,255,0.9)}' +
-        '.su-tos-hint{font-size:.6875rem;color:rgba(255,255,255,0.7);margin:.375rem 0 .25rem}' +
+        '.su-tos{margin:1.25rem 0 .5rem;text-align:left}' +
+        '.su-tos-body{max-height:7.5rem;overflow-y:auto;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.25);border-radius:8px;padding:.75rem .875rem;font-size:.75rem;line-height:1.5;color:rgba(255,255,255,0.9)}' +
+        '.su-tos-hint{font-size:.6875rem;color:rgba(255,255,255,0.7);margin:.5rem 0 .375rem}' +
         '.su-tos-hint.ok{color:#9ce8b5}' +
-        '.su-tos-check{display:flex;gap:.5rem;align-items:flex-start;font-size:.75rem;color:rgba(255,255,255,0.9);cursor:pointer;line-height:1.4}' +
+        '.su-tos-check{display:flex;gap:.5625rem;align-items:flex-start;font-size:.75rem;color:rgba(255,255,255,0.9);cursor:pointer;line-height:1.4;margin-top:.375rem}' +
         '.su-tos-check input{margin-top:.1875rem}' +
         '.su-tos-check input:disabled + span{opacity:.55}' +
-        '.su-sig-row{display:flex;flex-direction:column;gap:.25rem;margin:.375rem 0 .125rem;text-align:left}' +
+        '.su-sig-row{display:flex;flex-direction:column;gap:.4375rem;margin:.75rem 0 .25rem;text-align:left}' +
         '.su-sig-row > label{font-size:.75rem;color:rgba(255,255,255,0.85);font-weight:500;letter-spacing:.02em}' +
-        '.su-sig-note{font-size:.6875rem;color:rgba(255,255,255,0.7);line-height:1.4;margin:0 0 .125rem}' +
+        '.su-sig-note{font-size:.6875rem;color:rgba(255,255,255,0.7);line-height:1.4;margin:.125rem 0 .5rem}' +
         '.su-sig-pad{width:100%;height:7.5rem;background:#fff;border:1px solid rgba(255,255,255,0.25);border-radius:8px;touch-action:none;cursor:crosshair;display:block}' +
         '.su-sig-upload{font-size:.8125rem;color:rgba(255,255,255,0.9);padding:.5rem;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.25);border-radius:8px;cursor:pointer;display:none}' +
         '.su-sig-upload::file-selector-button{margin-right:.625rem;padding:.375rem .75rem;border:0;border-radius:6px;background:rgba(255,255,255,0.18);color:#fff;font-size:.75rem;font-weight:600;cursor:pointer}' +
@@ -2106,45 +2106,59 @@ document.addEventListener('DOMContentLoaded', async function() {
        Hooks: doLogin (post-login routing), Add Listing form (accuracy gate)
        Placeholder user until real auth lands. See plan §0/§7.3.
        ========================================================================== -->
-  <style id="k-net-new-ui">
-    /* Pending-approval & paywall pages reuse the existing `.page` flex layout. */
-    #page-pending-approval, #page-paywall { padding: 2rem; align-items: center; justify-content: center; }
-    .k-card-center { max-width: 35rem; width: 100%; padding: 2rem; border-radius: 16px;
-      background: rgba(255,255,255,.6); backdrop-filter: blur(20px) saturate(180%);
-      border: 1px solid rgba(255,255,255,.8); box-shadow: 0 10px 40px rgba(0,0,0,.08); text-align: center; }
-    .k-card-center .k-icon { font-size: 3rem; color: var(--gd, #2a7a3d); margin-bottom: 1rem; }
-    .k-card-center h2 { margin: 0 0 .5rem; font-size: 1.5rem; color: var(--td, #1a2b1a); }
-    .k-card-center p { margin: 0 0 1.25rem; color: var(--tm, #4a5a4a); line-height: 1.5; }
-    .k-btn { display: inline-block; padding: .75rem 1.5rem; border-radius: 10px; border: 0; cursor: pointer;
-      font-weight: 600; font-family: inherit; font-size: .875rem; }
-    .k-btn-primary { background: var(--gd, #2a7a3d); color: #fff; }
-    .k-btn-ghost { background: transparent; color: var(--td, #1a2b1a); border: 1px solid rgba(0,0,0,.15); }
-
-    .k-paywall-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; max-width: 55rem; width: 100%; }
-    @media (max-width: 720px) { .k-paywall-grid { grid-template-columns: 1fr; } }
-    .k-tier { padding: 1.5rem; border-radius: 16px; background: rgba(255,255,255,.6);
-      backdrop-filter: blur(20px) saturate(180%); border: 1px solid rgba(255,255,255,.8); }
-    .k-tier.featured { border: 2px solid var(--gd, #2a7a3d); }
-    .k-tier h3 { margin: 0 0 .25rem; font-size: 1.25rem; }
-    .k-tier .price { font-size: 1.75rem; font-weight: 700; color: var(--gd, #2a7a3d); margin: .5rem 0 .25rem; }
-    .k-tier .price small { font-size: .8125rem; font-weight: 400; color: var(--tm, #4a5a4a); }
-    .k-tier ul { list-style: none; padding: 0; margin: 1rem 0; }
-    .k-tier ul li { padding: .375rem 0; font-size: .875rem; color: var(--tm, #4a5a4a); }
-    .k-tier ul li i { color: var(--gd, #2a7a3d); margin-right: .5rem; width: 1rem; }
-    .k-tier .k-pay-row { display: flex; gap: .5rem; margin-top: 1rem; }
-    .k-tier .k-pay-row .k-btn { flex: 1; }
-
-    /* Tier-lock icon on sidebar nav-link and Call button */
-    .k-locked { position: relative; }
-    .k-locked > .k-lock-icon { position: absolute; top: 50%; right: .875rem; transform: translateY(-50%);
-      font-size: .6875rem; color: rgba(0,0,0,.45); pointer-events: none; }
-    .k-call-locked { opacity: .85; }
-    .k-call-locked::after { content: "\f023"; font-family: "Font Awesome 6 Free"; font-weight: 900;
-      margin-left: .5rem; font-size: .75rem; }
-
-    /* Accuracy overlay confirm button disabled state */
-    #overlay-accuracy-agreement .k-btn[disabled] { opacity: .5; cursor: not-allowed; }
-  </style>
+  <!-- ==========================================================================
+       k-net-new-ui-css — this WAS a static <style id="k-net-new-ui">, which the
+       bundler's documentElement.replaceWith() wipes at unpack (the same reason
+       every other k-* block self-reinjects its CSS). That left .k-btn / .k-tier /
+       lock-icon / paywall-page styles unapplied — e.g. the Premium upgrade
+       modal's buttons rendered as bare default browser buttons. Inject the same
+       CSS via JS and re-assert on konek-bundler-done + a short poll, exactly like
+       k-fluid-root / k-desktop-scale. Purely restores the intended CSS; no
+       markup or logic change. (Pending/success overlays already use inline
+       styles and are unaffected.)
+       ========================================================================== -->
+  <script id="k-net-new-ui-css">
+  (function(){
+    var CSS = [
+      '#page-pending-approval, #page-paywall { padding: 2rem; align-items: center; justify-content: center; }',
+      '.k-card-center { max-width: 35rem; width: 100%; padding: 2rem; border-radius: 16px; background: rgba(255,255,255,.6); backdrop-filter: blur(20px) saturate(180%); border: 1px solid rgba(255,255,255,.8); box-shadow: 0 10px 40px rgba(0,0,0,.08); text-align: center; }',
+      '.k-card-center .k-icon { font-size: 3rem; color: var(--gd, #2a7a3d); margin-bottom: 1rem; }',
+      '.k-card-center h2 { margin: 0 0 .5rem; font-size: 1.5rem; color: var(--td, #1a2b1a); }',
+      '.k-card-center p { margin: 0 0 1.25rem; color: var(--tm, #4a5a4a); line-height: 1.5; }',
+      '.k-btn { display: inline-block; padding: .75rem 1.5rem; border-radius: 10px; border: 0; cursor: pointer; font-weight: 600; font-family: inherit; font-size: .875rem; }',
+      '.k-btn-primary { background: var(--gd, #2a7a3d); color: #fff; }',
+      '.k-btn-ghost { background: transparent; color: var(--td, #1a2b1a); border: 1px solid rgba(0,0,0,.15); }',
+      '.k-paywall-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; max-width: 55rem; width: 100%; }',
+      '@media (max-width: 720px) { .k-paywall-grid { grid-template-columns: 1fr; } }',
+      '.k-tier { padding: 1.5rem; border-radius: 16px; background: rgba(255,255,255,.6); backdrop-filter: blur(20px) saturate(180%); border: 1px solid rgba(255,255,255,.8); }',
+      '.k-tier.featured { border: 2px solid var(--gd, #2a7a3d); }',
+      '.k-tier h3 { margin: 0 0 .25rem; font-size: 1.25rem; }',
+      '.k-tier .price { font-size: 1.75rem; font-weight: 700; color: var(--gd, #2a7a3d); margin: .5rem 0 .25rem; }',
+      '.k-tier .price small { font-size: .8125rem; font-weight: 400; color: var(--tm, #4a5a4a); }',
+      '.k-tier ul { list-style: none; padding: 0; margin: 1rem 0; }',
+      '.k-tier ul li { padding: .375rem 0; font-size: .875rem; color: var(--tm, #4a5a4a); }',
+      '.k-tier ul li i { color: var(--gd, #2a7a3d); margin-right: .5rem; width: 1rem; }',
+      '.k-tier .k-pay-row { display: flex; gap: .5rem; margin-top: 1rem; }',
+      '.k-tier .k-pay-row .k-btn { flex: 1; }',
+      '.k-locked { position: relative; }',
+      '.k-locked > .k-lock-icon { position: absolute; top: 50%; right: .875rem; transform: translateY(-50%); font-size: .6875rem; color: rgba(0,0,0,.45); pointer-events: none; }',
+      '.k-call-locked { opacity: .85; }',
+      '.k-call-locked::after { content: "\\f023"; font-family: "Font Awesome 6 Free"; font-weight: 900; margin-left: .5rem; font-size: .75rem; }',
+      '#overlay-accuracy-agreement .k-btn[disabled] { opacity: .5; cursor: not-allowed; }'
+    ].join('');
+    function inject(){
+      if (!document.head) return;
+      var ex = document.getElementById('k-net-new-ui-css-style');
+      if (ex){ if (ex.textContent !== CSS) ex.textContent = CSS; return; }
+      var s = document.createElement('style'); s.id = 'k-net-new-ui-css-style';
+      s.textContent = CSS; document.head.appendChild(s);
+    }
+    inject();
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', inject);
+    window.addEventListener('konek-bundler-done', inject);
+    var n = 0, iv = setInterval(function(){ n++; inject(); if (n > 60) clearInterval(iv); }, 100);
+  })();
+  </script>
 
   <script id="k-net-new-ui-js">
   (function(){
@@ -10211,11 +10225,14 @@ document.addEventListener('DOMContentLoaded', async function() {
          do NOT count toward scroll height — only the actual form drives scroll. */
       '.auth-bg,.auth-bg-overlay,.auth-blob{position:fixed !important;}',
       /* Card -> clean light card. */
-      '.auth-panel{background:#fff !important;border:1px solid var(--br,#d4dcd4) !important;box-shadow:0 12px 44px rgba(0,0,0,.10) !important;color:var(--td,#1a2b1a) !important;backdrop-filter:none !important;-webkit-backdrop-filter:none !important;max-height:none !important;overflow:visible !important;margin:auto 0 !important;flex:0 0 auto !important;padding:.875rem 1.875rem !important;}',
-      '.auth-logo-block{margin-bottom:.9375rem !important;}',
-      '.auth-title{color:var(--td,#1a2b1a) !important;}',
-      '.auth-sub{color:var(--tm,#4a5a4a) !important;margin-bottom:.6875rem !important;}',
-      '.af{margin-bottom:.625rem !important;}',
+      '.auth-panel{background:#fff !important;border:1px solid var(--br,#d4dcd4) !important;box-shadow:0 12px 44px rgba(0,0,0,.10) !important;color:var(--td,#1a2b1a) !important;backdrop-filter:none !important;-webkit-backdrop-filter:none !important;max-height:none !important;overflow:visible !important;margin:auto 0 !important;flex:0 0 auto !important;padding:1.875rem 2rem !important;}',
+      /* Phase 3 #1/#2: more breathing room — logo→heading gap, heading→sub,
+         sub→fields, and between fields. Spacing only; components unchanged. */
+      '.auth-logo-block{margin-bottom:1.5rem !important;}',
+      '.auth-title{color:var(--td,#1a2b1a) !important;margin-bottom:.4375rem !important;}',
+      '.auth-sub{color:var(--tm,#4a5a4a) !important;margin-bottom:1.25rem !important;}',
+      '.af{margin-bottom:.75rem !important;}',
+      '.auth-switch{margin-top:1.5rem !important;}',
       /* Hide the redundant Sign In/Sign Up tab switcher (its white-on-dark text
          is invisible on the white card, so it reads as a stray empty box). The
          bottom "Don\'t have an account? Sign up free" link switches instead. */

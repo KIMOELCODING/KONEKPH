@@ -11518,5 +11518,173 @@ document.addEventListener('DOMContentLoaded', async function() {
     var n = 0, iv = setInterval(function(){ n++; scan(); if (n > 80) clearInterval(iv); }, 100);
   })();
   </script>
+
+  <!-- ==========================================================================
+       k-help — Help & Support page polish (Phase 1: visual + content only).
+       The page ships in the bundler template as two identical .settings-card
+       blocks (static FAQ rows + a contact form). This block rebuilds the
+       #page-help content in place: an intro line, FAQ-primary / Contact-
+       secondary hierarchy, differentiated cards with icons, accessible FAQ
+       accordions (chevron rotate + max-height animation + hover/focus), fuller
+       answers, and a polished (but NOT wired) contact form. Self-reinjecting CSS
+       + rebuild, same pattern as the other k-* blocks (the bundler wipes the DOM
+       on unpack). Secondary text uses --ts (#4a6455, ~6:1 on the card) instead of
+       --tl (#7a9688, ~3.2:1) to meet WCAG AA. The Send button is intentionally
+       inert — wiring it is Phase 2.
+       ========================================================================== -->
+  <script id="k-help">
+  (function(){
+    var CSS = [
+      '#page-help .help-intro{font-size:.8125rem;line-height:1.6;color:var(--ts,#4a6455);max-width:44rem;margin:.25rem 0 1.5rem;}',
+      '.settings-card.help-card{padding:1.75rem;margin-bottom:0;}',
+      '#page-help .help-card + .help-card{margin-top:1.5rem;}',
+      '.help-card-hd{display:flex;align-items:flex-start;gap:.875rem;margin-bottom:1.25rem;}',
+      '.help-card-ic{flex:0 0 auto;width:2.75rem;height:2.75rem;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:1.125rem;}',
+      '.help-card-ic.faq{background:rgba(46,122,70,.13);color:var(--gd,#1a4229);}',
+      '.help-card-ic.contact{background:rgba(74,100,85,.10);color:var(--ts,#4a6455);}',
+      '.help-card-h{font-size:1rem;font-weight:800;color:var(--td,#0d1f15);margin:0 0 .1875rem;line-height:1.25;}',
+      '.help-card-sub{font-size:.75rem;color:var(--ts,#4a6455);margin:0;line-height:1.45;}',
+      /* FAQ accordions */
+      '.help-faq{border-top:1px solid rgba(210,224,215,.55);}',
+      '.help-faq-item{border-bottom:1px solid rgba(210,224,215,.55);}',
+      '.help-faq-q{width:100%;display:flex;align-items:center;justify-content:space-between;gap:1rem;background:none;border:0;cursor:pointer;text-align:left;padding:1.25rem .625rem;margin:0;font-family:inherit;font-size:.8438rem;font-weight:600;color:var(--td,#0d1f15);border-radius:8px;transition:background .15s;}',
+      '.help-faq-q:hover{background:rgba(234,245,238,.55);}',
+      '.help-faq-q:focus-visible{outline:2px solid var(--gl,#2e7a46);outline-offset:-2px;}',
+      '.help-faq-chev{flex:0 0 auto;color:var(--tl,#7a9688);font-size:.8125rem;transition:transform .25s ease;}',
+      '.help-faq-item.open .help-faq-q{color:var(--gd,#1a4229);}',
+      '.help-faq-item.open .help-faq-chev{transform:rotate(90deg);color:var(--gd,#1a4229);}',
+      '.help-faq-a{max-height:0;overflow:hidden;transition:max-height .28s ease;}',
+      '.help-faq-a-inner{padding:0 .625rem 1.25rem;font-size:.8125rem;line-height:1.7;color:var(--ts,#4a6455);}',
+      /* Contact form */
+      '.help-form{display:flex;flex-direction:column;gap:1rem;}',
+      '.help-field{display:flex;flex-direction:column;gap:.4375rem;}',
+      '.help-field label{font-size:.6875rem;font-weight:700;color:var(--ts,#4a6455);text-transform:uppercase;letter-spacing:.4px;}',
+      '.help-input{background:rgba(255,255,255,.6);border:1.5px solid var(--br,#d2e0d7);border-radius:10px;padding:.875rem 1rem;font-family:inherit;font-size:.8125rem;color:var(--td,#0d1f15);width:100%;box-sizing:border-box;transition:border-color .15s,box-shadow .15s;}',
+      '.help-input::placeholder{color:var(--tl,#7a9688);}',
+      '.help-input:focus{outline:none;border-color:var(--gl,#2e7a46);box-shadow:0 0 0 3px rgba(46,122,70,.14);}',
+      'textarea.help-input{min-height:8.75rem;resize:vertical;line-height:1.6;}',
+      '.help-hint{font-size:.7188rem;color:var(--ts,#4a6455);margin:.375rem 0 0;line-height:1.5;}',
+      '.help-send{width:100%;padding:.875rem;margin-top:.25rem;}',
+      '.help-email{font-size:.75rem;color:var(--ts,#4a6455);margin:1.125rem 0 0;text-align:center;}',
+      '.help-email a{color:var(--gd,#1a4229);font-weight:600;text-decoration:none;}',
+      '.help-email a:hover{text-decoration:underline;}'
+    ].join('');
+
+    function injectCss(){
+      if (!document.head) return;
+      var ex = document.getElementById('k-help-css');
+      if (ex){ if (ex.textContent !== CSS) ex.textContent = CSS; return; }
+      var s = document.createElement('style'); s.id = 'k-help-css';
+      s.textContent = CSS; document.head.appendChild(s);
+    }
+
+    var FAQS = [
+      { q:'How do I add a listing?',
+        a:'Navigate to Listings, then select Add Listing. Complete the required property details — location, price, photos, and amenities — and submit for review. Once an admin approves it, your listing becomes publicly visible to other brokers.' },
+      { q:'How long does listing approval take?',
+        a:'Most listings are reviewed within 1–3 business days. You’ll get a notification once it’s approved, or if we need more information. Editing an already-approved listing sends it back for a quick re-review before the changes go live.' },
+      { q:'How do I upgrade to Premium?',
+        a:'Open your Profile and select Upgrade, or choose a plan from the Premium page. Premium unlocks realtime chat with other brokers, broker matching, direct calls, a higher monthly listing quota, and a verified badge. Your listing quota refreshes monthly on every plan.' }
+    ];
+
+    function el(tag, cls, txt){ var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
+
+    function cardHeader(iconCls, faIcon, heading, sub){
+      var hd = el('div', 'help-card-hd');
+      var ic = el('div', 'help-card-ic ' + iconCls);
+      ic.innerHTML = '<i class="fa-solid ' + faIcon + '"></i>';
+      var box = el('div');
+      box.appendChild(el('div', 'help-card-h', heading));
+      box.appendChild(el('div', 'help-card-sub', sub));
+      hd.appendChild(ic); hd.appendChild(box);
+      return hd;
+    }
+
+    function buildFaqCard(){
+      var card = el('div', 'settings-card help-card');
+      card.appendChild(cardHeader('faq', 'fa-circle-question', 'Need quick answers?', 'Browse our most common questions.'));
+      var list = el('div', 'help-faq');
+      FAQS.forEach(function(f, i){
+        var item = el('div', 'help-faq-item');
+        var qId = 'help-faq-q-' + i, aId = 'help-faq-a-' + i;
+        var btn = el('button', 'help-faq-q');
+        btn.type = 'button'; btn.id = qId;
+        btn.setAttribute('aria-expanded', 'false');
+        btn.setAttribute('aria-controls', aId);
+        var qspan = el('span', null, f.q);
+        var chev = el('i', 'help-faq-chev fa-solid fa-chevron-right');
+        btn.appendChild(qspan); btn.appendChild(chev);
+        var ans = el('div', 'help-faq-a');
+        ans.id = aId; ans.setAttribute('role', 'region'); ans.setAttribute('aria-labelledby', qId);
+        ans.appendChild(el('div', 'help-faq-a-inner', f.a));
+        btn.addEventListener('click', function(){
+          var open = item.classList.toggle('open');
+          btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+          ans.style.maxHeight = open ? (ans.scrollHeight + 'px') : '0px';
+        });
+        item.appendChild(btn); item.appendChild(ans);
+        list.appendChild(item);
+      });
+      card.appendChild(list);
+      return card;
+    }
+
+    function field(labelText, inputEl){
+      var f = el('div', 'help-field');
+      var lb = el('label', null, labelText);
+      f.appendChild(lb); f.appendChild(inputEl);
+      return f;
+    }
+
+    function buildContactCard(){
+      var card = el('div', 'settings-card help-card');
+      card.appendChild(cardHeader('contact', 'fa-comment-dots', 'Still need help?', 'Send a message to our support team.'));
+      var form = el('div', 'help-form');
+
+      var subj = el('input', 'help-input');
+      subj.type = 'text'; subj.placeholder = 'What do you need help with?';
+      form.appendChild(field('Subject', subj));
+
+      var msgField = el('div', 'help-field');
+      msgField.appendChild(el('label', null, 'Message'));
+      var msg = el('textarea', 'help-input');
+      msg.placeholder = 'Describe your issue…';
+      msgField.appendChild(msg);
+      msgField.appendChild(el('p', 'help-hint', 'Please include property ID, listing title, screenshots, or any details that help us investigate.'));
+      form.appendChild(msgField);
+
+      // Visual only — submit wiring is Phase 2. Kept inert on purpose.
+      var send = el('button', 'btn btn-primary help-send', 'Send Message');
+      send.type = 'button';
+      form.appendChild(send);
+      card.appendChild(form);
+
+      var email = el('p', 'help-email');
+      email.innerHTML = 'Prefer email? <a href="mailto:support@konek.ph">support@konek.ph</a>';
+      card.appendChild(email);
+      return card;
+    }
+
+    function enhance(){
+      injectCss();
+      var scroll = document.querySelector('#page-help .inner-scroll');
+      if (!scroll || scroll.__helpEnhanced) return;
+      var hd = scroll.querySelector('.inner-hd');
+      if (!hd) return; // header not ready yet
+      // Remove the template's original cards, keep the header.
+      Array.prototype.slice.call(scroll.children).forEach(function(k){ if (k !== hd) scroll.removeChild(k); });
+      var intro = el('p', 'help-intro', 'Need assistance? Browse our frequently asked questions below, or send us a message if you can’t find what you’re looking for.');
+      scroll.appendChild(intro);
+      scroll.appendChild(buildFaqCard());
+      scroll.appendChild(buildContactCard());
+      scroll.__helpEnhanced = true;
+    }
+
+    enhance();
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', enhance);
+    window.addEventListener('konek-bundler-done', enhance);
+    var n = 0, iv = setInterval(function(){ n++; enhance(); if (n > 80) clearInterval(iv); }, 100);
+  })();
+  </script>
 </body>
 </html>

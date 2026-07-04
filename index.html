@@ -1820,6 +1820,24 @@ document.addEventListener('DOMContentLoaded', async function() {
       return d.toLocaleDateString('en-PH', { month:'short', day:'numeric' });
     }
 
+    // Compact location for cards: show only "City, Region" instead of the full
+    // "Barangay, City, Province/Region" string (which truncates ugly, e.g.
+    // "BARANGAY 287, Binondo, National Capital Regi…"). Prefer the structured
+    // city/region fields; fall back to parsing the combined loc string (last two
+    // comma segments ≈ city, region). Exposed globally so every compact card
+    // (home recent, dashboard recent, marketplace grid, similar listings) uses one.
+    window.__plCityRegion = function(o){
+      if (o && (o.city || o.region)){
+        var c = String(o.city || '').trim(), rg = String(o.region || '').trim();
+        if (c && rg) return c + ', ' + rg;
+        return c || rg;
+      }
+      var loc = (o && (o.loc || o.location)) || '';
+      var parts = String(loc).split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+      if (parts.length >= 2) return parts.slice(-2).join(', ');
+      return parts[0] || '';
+    };
+
     window.renderHomeRecent = function(){
       var list = document.getElementById('home-recent-listings');
       if (!list) return;
@@ -1846,7 +1864,7 @@ document.addEventListener('DOMContentLoaded', async function() {
           +   '<img class="hrl-img" src="' + esc(r.img || '') + '" alt="">'
           +   '<div class="hrl-info">'
           +     '<div class="hrl-name">' + esc(r.name || r.title || '') + '</div>'
-          +     '<div class="hrl-loc">'  + esc(r.loc  || '') + '</div>'
+          +     '<div class="hrl-loc">'  + esc(window.__plCityRegion(r)) + '</div>'
           +     '<div class="hrl-price">'+ esc(r.price|| '') + '</div>'
           +   '</div>'
           +   '<div class="hrl-time">' + esc(timeShort(r.created_at)) + '</div>'
@@ -4135,7 +4153,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         var l = document.createElement('div');
         l.className = 'rl-l';
-        l.textContent = r.loc || '';
+        l.textContent = window.__plCityRegion ? window.__plCityRegion(r) : (r.loc || '');
         info.appendChild(l);
 
         var p = document.createElement('div');
@@ -4722,7 +4740,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
       var body = document.createElement('div'); body.className = 'pc-body';
       var t  = document.createElement('div'); t.className  = 'pc-t';     t.textContent  = p.name  || 'Untitled';
-      var lc = document.createElement('div'); lc.className = 'pc-l';     lc.textContent = p.loc   || '';
+      var lc = document.createElement('div'); lc.className = 'pc-l';     lc.textContent = window.__plCityRegion ? window.__plCityRegion(p) : (p.loc || '');
       var sp = document.createElement('div'); sp.className = 'pc-specs'; sp.textContent = p.specs || '';
       var foot = document.createElement('div'); foot.className = 'pc-foot';
       var pr = document.createElement('div'); pr.className = 'pc-price'; pr.textContent = p.price || '';
@@ -5387,7 +5405,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       img.className = 'ld-sh-sim-img'; img.src = p.img || ''; img.alt = ''; img.loading = 'lazy';
       var body = document.createElement('div'); body.className = 'ld-sh-sim-body';
       var nm = document.createElement('div'); nm.className = 'ld-sh-sim-name';  nm.textContent = p.name || 'Listing';
-      var lc = document.createElement('div'); lc.className = 'ld-sh-sim-loc';   lc.textContent = p.loc || '';
+      var lc = document.createElement('div'); lc.className = 'ld-sh-sim-loc';   lc.textContent = window.__plCityRegion ? window.__plCityRegion(p) : (p.loc || '');
       var pr = document.createElement('div'); pr.className = 'ld-sh-sim-price'; pr.textContent = p.price || '';
       body.appendChild(nm); body.appendChild(lc); body.appendChild(pr);
       card.appendChild(img); card.appendChild(body);
@@ -5524,13 +5542,22 @@ document.addEventListener('DOMContentLoaded', async function() {
       var utilTokens = utils.map(norm);
 
       // --- Amenities (grouped) ---
-      // Drop amenity strings already shown as Utility cards (the broker often
-      // double-enters "Water"/"Electricity"/"Internet" in both fields), so the
-      // dedicated Utilities section stays the single source for those.
-      var amens = (Array.isArray(row.amenities) ? row.amenities.filter(Boolean) : []).filter(function(a){
+      // Consolidation: the dedicated Utilities field values are merged INTO the
+      // single "Utilities & Services" amenity group — there is no longer a
+      // separate standalone "Utilities" section. Combine the amenities array
+      // with the utility-field values, de-duplicate by normalized text, and
+      // force the utility-field values into the "Utilities & Services" bucket
+      // regardless of how the keyword classifier would otherwise bucket them.
+      var rawAmens = (Array.isArray(row.amenities) ? row.amenities.filter(Boolean) : []);
+      var seenAmen = {}, amens = [];
+      rawAmens.concat(utils).forEach(function(a){
         var n = norm(a);
-        return !utilTokens.some(function(t){ return t && (t === n || t.indexOf(n) >= 0 || n.indexOf(t) >= 0); });
+        if (!n || seenAmen[n]) return;
+        seenAmen[n] = 1; amens.push(a);
       });
+      var utilForce = {};
+      utils.forEach(function(u){ utilForce[norm(u)] = 1; });
+
       var amTitle = document.createElement('div');
       amTitle.className = 'ld-sh-section-title';
       amTitle.textContent = 'Amenities';
@@ -5542,7 +5569,10 @@ document.addEventListener('DOMContentLoaded', async function() {
         host.appendChild(noAm);
       } else {
         var buckets = {};
-        amens.forEach(function(a){ var c = classifyAmenity(a); (buckets[c] = buckets[c] || []).push(a); });
+        amens.forEach(function(a){
+          var c = utilForce[norm(a)] ? 'Utilities & Services' : classifyAmenity(a);
+          (buckets[c] = buckets[c] || []).push(a);
+        });
         var order = AMEN_GROUPS.map(function(g){ return g[0]; }).concat(['Other Features']);
         var groupsWrap = document.createElement('div');
         groupsWrap.className = 'ld-sh-amen-groups';
@@ -5566,26 +5596,8 @@ document.addEventListener('DOMContentLoaded', async function() {
         });
         host.appendChild(groupsWrap);
       }
-
-      // --- Utilities (scannable cards) --- (utils computed above)
-      if (utils.length){
-        var uTitle = document.createElement('div');
-        uTitle.className = 'ld-sh-section-title';
-        uTitle.style.marginTop = '22px';
-        uTitle.textContent = 'Utilities';
-        host.appendChild(uTitle);
-        var uGrid = document.createElement('div'); uGrid.className = 'ld-sh-util-grid';
-        utils.forEach(function(u){
-          var card = document.createElement('div'); card.className = 'ld-sh-util-card';
-          var ic = document.createElement('div'); ic.className = 'ld-sh-util-ic';
-          ic.innerHTML = '<i class="fa-solid ' + utilIcon(u) + '"></i>';
-          var tx = document.createElement('div'); tx.className = 'ld-sh-util-name';
-          tx.textContent = u;
-          card.appendChild(ic); card.appendChild(tx);
-          uGrid.appendChild(card);
-        });
-        host.appendChild(uGrid);
-      }
+      // (Standalone "Utilities" card section removed — its content is now folded
+      // into the "Utilities & Services" group above.)
     }
 
     // Paint the listing-detail agent card (name/role/avatar) from a broker
@@ -10607,11 +10619,18 @@ document.addEventListener('DOMContentLoaded', async function() {
       '.hln-card-date{font-size:.75rem !important;color:var(--tm) !important;font-weight:600 !important;}',
 
       /* 4. Article page — darker body text, looser paragraphs, and a
-            comfortable centered reading column (hero image stays full
-            width; only the text column is constrained). */
+            comfortable centered reading column. Constrain the WHOLE content
+            column (hero image included) to one reading width so the hero,
+            title, byline and body all share the same left/right edges — the
+            hero previously spanned wider than the centered text, which read
+            as a broken/misaligned layout on desktop. */
       '.article-body p{color:var(--tm) !important;line-height:1.75 !important;margin-bottom:1.125rem !important;}',
       '.article-body h3{margin:1.625rem 0 .75rem !important;}',
+      '.article-content{max-width:47.5rem !important;margin-left:auto !important;margin-right:auto !important;}',
       '.article-title,.article-byline,.article-body{max-width:47.5rem !important;margin-left:auto !important;margin-right:auto !important;}',
+      /* Images fit their container (hero + any inline body images), never overflow. */
+      '.article-hero-img{max-width:100% !important;}',
+      '.article-body img{max-width:100% !important;height:auto !important;border-radius:var(--r2,14px);}',
 
       /* 5. Recent Listings (home right panel) — remove the double top
             margin so the first row sits under the title; make the
@@ -10792,6 +10811,15 @@ document.addEventListener('DOMContentLoaded', async function() {
       window.openArticle = function(type, title, author, date, img, bodyHtml){
         var r = orig.apply(this, arguments);
         injectBody(bodyHtml);
+        // Hide the hero when the article has no image, so image-less
+        // announcements/memoranda don't render an empty/broken hero box.
+        try {
+          var heroEl = document.getElementById('art-img');
+          if (heroEl){
+            var hasImg = img && String(img).trim() && String(img).trim() !== 'undefined';
+            heroEl.style.display = hasImg ? '' : 'none';
+          }
+        } catch(e){}
         try { fillSidebar(type, title); } catch(e){ console.warn('[k-phase2] sidebar', e); }
         return r;
       };

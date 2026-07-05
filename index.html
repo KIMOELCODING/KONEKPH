@@ -11567,7 +11567,19 @@ document.addEventListener('DOMContentLoaded', async function() {
       '.help-send{width:100%;padding:.875rem;margin-top:.25rem;}',
       '.help-email{font-size:.75rem;color:var(--ts,#4a6455);margin:1.125rem 0 0;text-align:center;}',
       '.help-email a{color:var(--gd,#1a4229);font-weight:600;text-decoration:none;}',
-      '.help-email a:hover{text-decoration:underline;}'
+      '.help-email a:hover{text-decoration:underline;}',
+      /* Phase 2: category select, validation/loading/error/success states */
+      'select.help-input{cursor:pointer;}',
+      '.help-error{color:#c0392b;font-size:.75rem;line-height:1.4;margin:.125rem 0 0;min-height:1rem;}',
+      '.help-send:disabled{opacity:.55;cursor:not-allowed;}',
+      '.help-success{text-align:center;padding:1.25rem .5rem .5rem;}',
+      '.help-success-ic{font-size:2.75rem;color:var(--gl,#2e7a46);margin-bottom:.75rem;line-height:1;}',
+      '.help-success-h{font-size:1rem;font-weight:800;color:var(--td,#0d1f15);margin-bottom:.375rem;}',
+      '.help-success-p{font-size:.8125rem;color:var(--ts,#4a6455);line-height:1.6;max-width:26rem;margin:0 auto 1rem;}',
+      '.help-ref{display:inline-block;background:rgba(46,122,70,.1);color:var(--gd,#1a4229);border:1px solid rgba(46,122,70,.28);border-radius:10px;padding:.5rem .875rem;font-size:.8125rem;margin-bottom:1.25rem;}',
+      '.help-ref strong{font-weight:800;letter-spacing:.3px;}',
+      '.help-again{background:none;border:0;color:var(--gd,#1a4229);font-weight:600;font-size:.8125rem;cursor:pointer;text-decoration:underline;font-family:inherit;padding:.25rem;}',
+      '.help-again:hover{color:var(--gl,#2e7a46);}'
     ].join('');
 
     function injectCss(){
@@ -11636,15 +11648,49 @@ document.addEventListener('DOMContentLoaded', async function() {
       return f;
     }
 
-    function buildContactCard(){
-      var card = el('div', 'settings-card help-card');
-      card.appendChild(cardHeader('contact', 'fa-comment-dots', 'Still need help?', 'Send a message to our support team.'));
+    // Category options for the support-ticket dropdown. Free-text in the DB
+    // (no check constraint) — this list is the single UI-enforced source, so it
+    // can change without a migration.
+    var HELP_CATEGORIES = ['Listing Issues','Payments','Premium Subscription','Verification','Technical Issue','Account','Bug Report','Other'];
+
+    function renderContactSuccess(body, ref){
+      body.innerHTML = '';
+      var wrap = el('div', 'help-success');
+      var ic = el('div', 'help-success-ic'); ic.innerHTML = '<i class="fa-solid fa-circle-check"></i>';
+      wrap.appendChild(ic);
+      wrap.appendChild(el('div', 'help-success-h', 'Message sent successfully'));
+      wrap.appendChild(el('p', 'help-success-p', 'We’ve received your request and typically respond within 1–2 business days.'));
+      if (ref){
+        var refBox = el('div', 'help-ref');
+        refBox.appendChild(document.createTextNode('Reference: '));
+        var strong = el('strong', null, '#' + ref);
+        refBox.appendChild(strong);
+        wrap.appendChild(refBox);
+      }
+      var again = el('button', 'help-again', 'Send another message');
+      again.type = 'button';
+      again.addEventListener('click', function(){ renderContactForm(body); });
+      wrap.appendChild(again);
+      body.appendChild(wrap);
+    }
+
+    function renderContactForm(body){
+      body.innerHTML = '';
       var form = el('div', 'help-form');
 
+      // Category dropdown
+      var catSel = el('select', 'help-input');
+      var ph = el('option', null, 'Select a category'); ph.value = ''; ph.disabled = true; ph.selected = true;
+      catSel.appendChild(ph);
+      HELP_CATEGORIES.forEach(function(c){ var o = el('option', null, c); o.value = c; catSel.appendChild(o); });
+      form.appendChild(field('Category', catSel));
+
+      // Subject
       var subj = el('input', 'help-input');
       subj.type = 'text'; subj.placeholder = 'What do you need help with?';
       form.appendChild(field('Subject', subj));
 
+      // Message + helper text
       var msgField = el('div', 'help-field');
       msgField.appendChild(el('label', null, 'Message'));
       var msg = el('textarea', 'help-input');
@@ -11653,15 +11699,65 @@ document.addEventListener('DOMContentLoaded', async function() {
       msgField.appendChild(el('p', 'help-hint', 'Please include property ID, listing title, screenshots, or any details that help us investigate.'));
       form.appendChild(msgField);
 
-      // Visual only — submit wiring is Phase 2. Kept inert on purpose.
+      var err = el('div', 'help-error');
+      form.appendChild(err);
+
       var send = el('button', 'btn btn-primary help-send', 'Send Message');
-      send.type = 'button';
+      send.type = 'button'; send.disabled = true;
       form.appendChild(send);
-      card.appendChild(form);
+      body.appendChild(form);
 
       var email = el('p', 'help-email');
       email.innerHTML = 'Prefer email? <a href="mailto:support@konek.ph">support@konek.ph</a>';
-      card.appendChild(email);
+      body.appendChild(email);
+
+      // Enable Send only when Category + Subject + Message are all filled.
+      function refresh(){
+        send.disabled = !(catSel.value && subj.value.trim() && msg.value.trim());
+      }
+      [catSel, subj, msg].forEach(function(elm){
+        elm.addEventListener('input', function(){ err.textContent = ''; refresh(); });
+        elm.addEventListener('change', function(){ err.textContent = ''; refresh(); });
+      });
+      refresh();
+
+      send.addEventListener('click', function(){ submitTicket(); });
+
+      async function submitTicket(){
+        err.textContent = '';
+        var uid = window.__currentUser && window.__currentUser.id;
+        if (!uid || !window.sb){ err.textContent = 'Please sign in again to send a message.'; return; }
+        var category = catSel.value, subject = (subj.value || '').trim(), message = (msg.value || '').trim();
+        if (!category){ err.textContent = 'Please choose a category.'; return; }
+        if (!subject){ err.textContent = 'Please enter a subject.'; return; }
+        if (!message){ err.textContent = 'Please describe your issue.'; return; }
+        send.disabled = true; var prev = send.textContent; send.textContent = 'Sending…';
+        try {
+          // reference_no is server-generated (trigger); read it back for the receipt.
+          var res = await window.sb.from('support_tickets')
+            .insert({ user_id: uid, category: category, subject: subject, message: message })
+            .select('reference_no').single();
+          if (res.error){
+            send.disabled = false; send.textContent = prev;
+            err.textContent = res.error.message || 'Could not send your message. Please try again.';
+            if (window.__konekToast) window.__konekToast('Could not send your message.', true);
+            return;
+          }
+          renderContactSuccess(body, (res.data && res.data.reference_no) || '');
+          if (window.__konekToast) window.__konekToast('Message sent — we’ll get back to you soon.');
+        } catch(e){
+          send.disabled = false; send.textContent = prev;
+          err.textContent = (e && e.message) || 'Could not send your message. Please try again.';
+        }
+      }
+    }
+
+    function buildContactCard(){
+      var card = el('div', 'settings-card help-card');
+      card.appendChild(cardHeader('contact', 'fa-comment-dots', 'Still need help?', 'Send a message to our support team.'));
+      var body = el('div', 'help-contact-body');
+      card.appendChild(body);
+      renderContactForm(body);
       return card;
     }
 

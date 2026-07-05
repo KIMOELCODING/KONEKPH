@@ -73,6 +73,18 @@ export interface Report {
   profiles?: { first_name: string; last_name: string; email: string | null } | null;
 }
 
+export interface SupportTicket {
+  id: string;
+  user_id: string;
+  category: string;
+  subject: string;
+  message: string;
+  status: 'open' | 'in_progress' | 'resolved' | 'closed';
+  reference_no: string | null;
+  created_at: string;
+  profiles?: { first_name: string; last_name: string; email: string | null } | null;
+}
+
 export interface PromotedSlide {
   id: string;
   title: string;

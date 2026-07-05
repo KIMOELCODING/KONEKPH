@@ -14,6 +14,7 @@ const Reports          = lazy(() => import('./pages/Reports'));
 const AdminArticles    = lazy(() => import('./pages/AdminArticles'));
 const AdminPromotions  = lazy(() => import('./pages/AdminPromotions'));
 const AdminUsers       = lazy(() => import('./pages/AdminUsers'));
+const SupportTickets   = lazy(() => import('./pages/SupportTickets'));
 
 function PageFallback() {
   return <div className="card"><p className="muted">Loading…</p></div>;
@@ -158,6 +159,7 @@ export default function App() {
           <Route path="/articles" element={<AdminArticles />} />
           <Route path="/promotions" element={<AdminPromotions />} />
           <Route path="/users" element={<AdminUsers />} />
+          <Route path="/support" element={<SupportTickets />} />
           <Route path="*" element={<Navigate to="/brokers" replace />} />
         </Routes>
       </Suspense>

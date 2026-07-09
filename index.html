@@ -7544,6 +7544,18 @@ document.addEventListener('DOMContentLoaded', async function() {
     // realtime echo) → collapse. Never re-expands on settle.
     var chipReopen = { convId: null, baseline: 0 };
 
+    // Phase 2 — scroll-aware jump-to-latest. isNearBottom tracks whether the
+    // user is pinned near the bottom of the thread; when they scroll up we stop
+    // auto-following renders (except their own sends) and offer a jump pill.
+    var NEAR_BOTTOM_PX = 120;
+    var isNearBottom = true;
+    var hasNewHint = false;              // an inbound message arrived while scrolled up
+    var renderCountByConv = {};          // last-rendered message count per conversation
+
+    // Phase 2 — composer. No DB limit on messages.body (unlimited text), so cap
+    // at a sane 2000 both visually (counter) and in the send-guard.
+    var MAX_MSG_LEN = 2000;
+
     function currentUid(){
       return (window.__currentUser && window.__currentUser.id) || null;
     }
@@ -7797,6 +7809,20 @@ document.addEventListener('DOMContentLoaded', async function() {
           '.kmsg-qr-chip:focus-visible{outline:2px solid var(--gd);outline-offset:2px;}' +
           '#kmsg-chips-toggle{align-items:center;gap:.375rem;height:30px;padding:0 12px;border-radius:9999px;border:1px solid rgba(210,224,215,.7);background:rgba(255,255,255,.5);color:var(--tm);font:inherit;font-size:.72rem;font-weight:600;cursor:pointer;transition:background .16s ease,color .16s ease;}' +
           '#kmsg-chips-toggle:hover{background:rgba(46,122,70,.08);color:var(--gd);}' +
+          // Phase 2 — jump-to-latest pill (floats above the composer, over the thread).
+          '#kmsg-body-wrap{position:relative;flex:1;display:flex;flex-direction:column;min-height:0;}' +
+          '#kmsg-jump{position:absolute;left:50%;bottom:.75rem;transform:translateX(-50%) translateY(6px);opacity:0;pointer-events:none;display:inline-flex;align-items:center;gap:.4375rem;height:34px;padding:0 14px;border-radius:9999px;border:1px solid rgba(46,122,70,.3);background:var(--gd);color:#fff;font:inherit;font-size:.75rem;font-weight:700;cursor:pointer;box-shadow:0 4px 14px rgba(10,30,18,.22);transition:opacity .15s ease,transform .15s ease;z-index:5;}' +
+          '#kmsg-jump-dot{display:none;width:.5rem;height:.5rem;border-radius:50%;background:#ffd24a;box-shadow:0 0 0 2px rgba(255,255,255,.35);}' +
+          // Phase 2 — send-state + counter.
+          '#kmsg-send{transition:opacity .15s ease,background .15s ease;}' +
+          '#kmsg-send.is-off{opacity:.45;cursor:default;}' +
+          '#kmsg-send.is-sending{opacity:.7;cursor:default;pointer-events:none;}' +
+          '#kmsg-send .kmsg-send-spin{display:inline-block;width:.75rem;height:.75rem;border:2px solid rgba(255,255,255,.5);border-top-color:#fff;border-radius:50%;animation:kmsgspin .7s linear infinite;vertical-align:-1px;}' +
+          '@keyframes kmsgspin{to{transform:rotate(360deg)}}' +
+          '#kmsg-composer-meta{display:flex;justify-content:flex-end;padding:.25rem .125rem 0;}' +
+          '#kmsg-counter{font-size:.6563rem;color:var(--tl);font-variant-numeric:tabular-nums;}' +
+          '#kmsg-counter.warn{color:#c8890a;}' +
+          '#kmsg-counter.over{color:#d94f4f;font-weight:700;}' +
         '</style>' +
         '<div id="kmsg-header" style="padding:.875rem 1.125rem;border-bottom:1px solid rgba(210,224,215,.4);background:rgba(255,255,255,.6);display:flex;align-items:center;gap:.625rem;flex-shrink:0;">' +
           '<div id="kmsg-hdr-empty" style="font-size:.8125rem;color:var(--tm);">Select a conversation to start messaging.</div>' +
@@ -7812,7 +7838,10 @@ document.addEventListener('DOMContentLoaded', async function() {
             '<button id="kmsg-menu-btn" type="button" title="Details" aria-label="Conversation details" style="width:2.25rem;height:2.25rem;border:none;border-radius:50%;background:rgba(255,255,255,.55);color:var(--tm);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:.9375rem;"><i class="fa-solid fa-ellipsis-vertical"></i></button>' +
           '</div>' +
         '</div>' +
-        '<div id="kmsg-body" style="flex:1;overflow-y:auto;padding:1rem;display:flex;flex-direction:column;gap:.125rem;background:rgba(255,255,255,.35);"></div>' +
+        '<div id="kmsg-body-wrap">' +
+          '<div id="kmsg-body" style="flex:1;overflow-y:auto;padding:1rem;display:flex;flex-direction:column;gap:.125rem;background:rgba(255,255,255,.35);"></div>' +
+          '<button type="button" id="kmsg-jump" aria-label="Jump to latest messages"><span id="kmsg-jump-dot"></span><span id="kmsg-jump-label">Jump to latest</span><i class="fa-solid fa-arrow-down"></i></button>' +
+        '</div>' +
         '<div id="kmsg-composer" style="padding:.75rem .875rem;border-top:1px solid rgba(210,224,215,.4);background:rgba(255,255,255,.6);display:none;flex-shrink:0;">' +
           // Quick-reply chips (Phase 1). Shown until the current broker sends
           // their first message; then collapse into the "Suggested questions"
@@ -7826,6 +7855,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             '<textarea id="kmsg-input" rows="1" placeholder="Type a message…" style="flex:1;resize:none;max-height:7.5rem;border:1px solid rgba(210,224,215,.6);border-radius:10px;padding:.625rem .75rem;font:inherit;font-size:.8125rem;background:#fff;"></textarea>' +
             '<button type="submit" id="kmsg-send" style="background:var(--gd);color:#fff;border:none;border-radius:10px;padding:.625rem 1rem;font-size:.8125rem;font-weight:700;cursor:pointer;">Send</button>' +
           '</form>' +
+          '<div id="kmsg-composer-meta"><span id="kmsg-counter">0/' + MAX_MSG_LEN + '</span></div>' +
         '</div>';
       panel.appendChild(overlay);
 
@@ -7856,6 +7886,20 @@ document.addEventListener('DOMContentLoaded', async function() {
       });
       // Broadcast a throttled "typing" ping to the other participant.
       input.addEventListener('input', sendTyping);
+      // Composer polish: reflect send-state (empty / over-limit / sending) and
+      // the live character counter on every keystroke. Presentation only.
+      input.addEventListener('input', refreshSendUI);
+
+      // Scroll-awareness: track near-bottom + toggle the jump pill.
+      var bodyEl = overlay.querySelector('#kmsg-body');
+      if (bodyEl) bodyEl.addEventListener('scroll', onBodyScroll);
+      var jumpBtn = overlay.querySelector('#kmsg-jump');
+      if (jumpBtn) jumpBtn.addEventListener('click', function(){
+        var b = document.getElementById('kmsg-body');
+        if (b) b.scrollTo({ top: b.scrollHeight, behavior: 'smooth' });
+        isNearBottom = true; hasNewHint = false; updateJumpPill();
+      });
+      refreshSendUI(); // initial state (empty → disabled look)
 
       // Header actions: search (Phase-C placeholder) + 3-dot details drawer.
       var searchBtn = overlay.querySelector('#kmsg-search-btn');
@@ -7915,6 +7959,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     async function openConversation(convId){
       CURRENT_CONV_ID = convId;
+      isNearBottom = true; hasNewHint = false; // fresh thread opens pinned to bottom
       hideTypingIndicator();
       joinTypingChannel(convId);
       var conv = CONVERSATIONS.find(function(c){ return c.id === convId; });
@@ -7971,6 +8016,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       // Replicate the composer's auto-grow (it lives on the keydown handler).
       input.style.height = 'auto';
       input.style.height = Math.min(120, input.scrollHeight) + 'px';
+      refreshSendUI(); // populated → Send enables + counter updates
     }
 
     // Manual reopen after collapse: capture the current outbound count as the
@@ -7998,6 +8044,52 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (toggle) toggle.style.display = expanded ? 'none' : 'inline-flex';
     }
 
+    // Phase 2 — update near-bottom state as the user scrolls the thread.
+    function onBodyScroll(){
+      var body = document.getElementById('kmsg-body');
+      if (!body) return;
+      var dist = body.scrollHeight - body.scrollTop - body.clientHeight;
+      isNearBottom = dist <= NEAR_BOTTOM_PX;
+      if (isNearBottom) hasNewHint = false;
+      updateJumpPill();
+    }
+
+    // Show the jump pill only when scrolled up with messages present; swap its
+    // label to a "New messages" hint when an inbound message arrived meanwhile.
+    function updateJumpPill(){
+      var pill = document.getElementById('kmsg-jump');
+      if (!pill) return;
+      var rows = MESSAGES_BY_CONV[CURRENT_CONV_ID] || [];
+      var show = !isNearBottom && rows.length > 0;
+      pill.style.opacity = show ? '1' : '0';
+      pill.style.pointerEvents = show ? 'auto' : 'none';
+      pill.style.transform = 'translateX(-50%) translateY(' + (show ? '0' : '6px') + ')';
+      var dot = document.getElementById('kmsg-jump-dot');
+      var label = document.getElementById('kmsg-jump-label');
+      if (dot) dot.style.display = hasNewHint ? 'inline-block' : 'none';
+      if (label) label.textContent = hasNewHint ? 'New messages' : 'Jump to latest';
+    }
+
+    // Phase 2 — reflect composer send-state + character counter. Presentation
+    // only: submitMessage's guard still decides whether a send actually goes.
+    function refreshSendUI(){
+      var input = document.getElementById('kmsg-input');
+      var btn = document.getElementById('kmsg-send');
+      var counter = document.getElementById('kmsg-counter');
+      var val = input ? (input.value || '') : '';
+      var len = val.length;
+      var sendable = val.trim().length > 0 && len <= MAX_MSG_LEN;
+      if (btn){
+        btn.classList.toggle('is-sending', !!sending);
+        btn.classList.toggle('is-off', !sending && !sendable);
+        btn.innerHTML = sending ? '<span class="kmsg-send-spin"></span> Sending' : 'Send';
+      }
+      if (counter){
+        counter.textContent = len + '/' + MAX_MSG_LEN;
+        counter.className = len > MAX_MSG_LEN ? 'over' : (len >= MAX_MSG_LEN * 0.9 ? 'warn' : '');
+      }
+    }
+
     function renderMessages(convId){
       var body = document.getElementById('kmsg-body');
       if (!body) return;
@@ -8010,6 +8102,8 @@ document.addEventListener('DOMContentLoaded', async function() {
         empty.style.cssText = 'padding:1.75rem .5rem;text-align:center;color:var(--tm);font-size:.7813rem;';
         empty.textContent = 'No messages yet — say hi!';
         body.appendChild(empty);
+        renderCountByConv[convId] = 0;
+        updateJumpPill();
         return;
       }
       // Group consecutive messages from the same sender within a 5-minute window
@@ -8030,8 +8124,21 @@ document.addEventListener('DOMContentLoaded', async function() {
           lastOfCluster: lastOfCluster
         }));
       });
-      // Scroll to bottom.
-      body.scrollTop = body.scrollHeight;
+      // Phase 2 — only follow to the bottom when the user is already near it, or
+      // when the newest message is their own send (you always follow your own).
+      // Otherwise leave scroll where they put it; flag an inbound arrival so the
+      // jump pill can show a "New messages" hint.
+      var lastMsg = rows[rows.length - 1];
+      var lastIsOutbound = !!(lastMsg && lastMsg.sender_id === uid);
+      var grew = rows.length > (renderCountByConv[convId] || 0);
+      if (isNearBottom || lastIsOutbound){
+        body.scrollTop = body.scrollHeight;
+        isNearBottom = true; hasNewHint = false;
+      } else if (grew && lastMsg && !lastIsOutbound){
+        hasNewHint = true;
+      }
+      renderCountByConv[convId] = rows.length;
+      updateJumpPill();
     }
 
     function buildBubble(m, mine, opts){
@@ -8144,11 +8251,18 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (window.__konekToast) window.__konekToast("Keep it on ProList — phone numbers, landlines and email addresses can't be sent in chat.", true);
         return;
       }
+      // Over-limit block — same shape as the guards above (toast + return, input
+      // left intact). Extends the guard; does not change the existing checks.
+      if (body.length > MAX_MSG_LEN){
+        if (window.__konekToast) window.__konekToast('Message is too long — keep it under ' + MAX_MSG_LEN + ' characters.', true);
+        return;
+      }
       var uid = currentUid();
       if (!uid){ console.warn('[k-messages] submit: not signed in'); return; }
 
       sending = true;
       input.disabled = true;
+      refreshSendUI(); // show the in-flight sending state
 
       // Optimistic UI: append a pending bubble immediately.
       var tempId = 'tmp-' + Date.now();
@@ -8173,6 +8287,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (idx >= 0) rows[idx].__failed = true, rows[idx].__pending = false;
         renderMessages(CURRENT_CONV_ID);
         input.disabled = false; sending = false;
+        refreshSendUI();
         return;
       }
       // Replace optimistic with server row — idempotently. The realtime channel
@@ -8189,6 +8304,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       input.style.height = 'auto';
       input.disabled = false;
       sending = false;
+      refreshSendUI(); // cleared input → back to disabled look
       renderMessages(CURRENT_CONV_ID);
 
       // Advance our own last_read_at past the message we just sent (stamp it with
@@ -8331,7 +8447,7 @@ document.addEventListener('DOMContentLoaded', async function() {
           '<i style="width:.375rem;height:.375rem;border-radius:50%;background:var(--tl);animation:kmsgblink 1s infinite .4s;"></i>' +
           '</div>';
         body.appendChild(el);
-        body.scrollTop = body.scrollHeight;
+        if (isNearBottom) body.scrollTop = body.scrollHeight; // don't yank up-scrolled readers
       }
       if (typingHideTimer) clearTimeout(typingHideTimer);
       typingHideTimer = setTimeout(hideTypingIndicator, 3000);

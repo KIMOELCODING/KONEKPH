@@ -7528,6 +7528,22 @@ document.addEventListener('DOMContentLoaded', async function() {
     var typingHideTimer = null;   // hide the incoming "typing…" bubble after idle
     var listingTitleCache = {};    // listing_id → {title, price, img}
 
+    // Quick-reply chips (Phase 1). Broker-to-broker copy: one licensed broker
+    // messaging another about their listing. Click populates the composer only.
+    var QUICK_REPLIES = [
+      { label: 'Is this still available?',      text: 'Hi! Just checking if this listing is still available?' },
+      { label: 'Send me more details',          text: 'Hi! Could you send me more details on this property — floor area, price terms, and turnover status?' },
+      { label: 'Open for co-broke?',            text: 'Hi! Is this listing open for co-broke? Would love to discuss terms.' },
+      { label: 'Can I get more photos?',        text: 'Hi! Could you share a few more photos of this property?' },
+      { label: 'Request a viewing schedule',    text: "Hi! I'd like to arrange a viewing for my client. What dates/times work?" },
+      { label: 'Is the price still firm?',      text: 'Hi! Is the listed price still firm, or is there room to negotiate?' }
+    ];
+    // Tracks a manual reopen of the chips after the first outbound message. We
+    // keep chips expanded while outbound count stays <= baseline; a real send
+    // pushes it above baseline (even transiently, via the optimistic row +
+    // realtime echo) → collapse. Never re-expands on settle.
+    var chipReopen = { convId: null, baseline: 0 };
+
     function currentUid(){
       return (window.__currentUser && window.__currentUser.id) || null;
     }
@@ -7773,7 +7789,15 @@ document.addEventListener('DOMContentLoaded', async function() {
       overlay.id = 'kmsg-overlay';
       overlay.style.cssText = 'flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;';
       overlay.innerHTML =
-        '<style>@keyframes kmsgblink{0%,80%,100%{opacity:.3}40%{opacity:1}}</style>' +
+        '<style>@keyframes kmsgblink{0%,80%,100%{opacity:.3}40%{opacity:1}}' +
+          '#kmsg-chips-wrap{padding:0 0 .5rem;}' +
+          '#kmsg-chips{display:flex;flex-wrap:wrap;gap:8px;}' +
+          '.kmsg-qr-chip{height:38px;padding:0 16px;border-radius:9999px;border:1px solid rgba(46,122,70,.3);background:rgba(46,122,70,.06);color:var(--gd);font:inherit;font-size:.75rem;font-weight:600;line-height:1;cursor:pointer;display:inline-flex;align-items:center;white-space:nowrap;transition:transform .16s ease,background .16s ease,box-shadow .16s ease;}' +
+          '.kmsg-qr-chip:hover{transform:translateY(-1px);background:rgba(46,122,70,.12);box-shadow:0 2px 8px rgba(10,30,18,.1);}' +
+          '.kmsg-qr-chip:focus-visible{outline:2px solid var(--gd);outline-offset:2px;}' +
+          '#kmsg-chips-toggle{align-items:center;gap:.375rem;height:30px;padding:0 12px;border-radius:9999px;border:1px solid rgba(210,224,215,.7);background:rgba(255,255,255,.5);color:var(--tm);font:inherit;font-size:.72rem;font-weight:600;cursor:pointer;transition:background .16s ease,color .16s ease;}' +
+          '#kmsg-chips-toggle:hover{background:rgba(46,122,70,.08);color:var(--gd);}' +
+        '</style>' +
         '<div id="kmsg-header" style="padding:.875rem 1.125rem;border-bottom:1px solid rgba(210,224,215,.4);background:rgba(255,255,255,.6);display:flex;align-items:center;gap:.625rem;flex-shrink:0;">' +
           '<div id="kmsg-hdr-empty" style="font-size:.8125rem;color:var(--tm);">Select a conversation to start messaging.</div>' +
           '<img id="kmsg-hdr-av" alt="" style="width:2.25rem;height:2.25rem;border-radius:50%;display:none;">' +
@@ -7790,6 +7814,14 @@ document.addEventListener('DOMContentLoaded', async function() {
         '</div>' +
         '<div id="kmsg-body" style="flex:1;overflow-y:auto;padding:1rem;display:flex;flex-direction:column;gap:.125rem;background:rgba(255,255,255,.35);"></div>' +
         '<div id="kmsg-composer" style="padding:.75rem .875rem;border-top:1px solid rgba(210,224,215,.4);background:rgba(255,255,255,.6);display:none;flex-shrink:0;">' +
+          // Quick-reply chips (Phase 1). Shown until the current broker sends
+          // their first message; then collapse into the "Suggested questions"
+          // toggle. Clicking a chip only populates the composer — the existing
+          // send-guard still applies on submit.
+          '<div id="kmsg-chips-wrap">' +
+            '<div id="kmsg-chips"></div>' +
+            '<button type="button" id="kmsg-chips-toggle" style="display:none;"><i class="fa-solid fa-comment-dots"></i> Suggested questions</button>' +
+          '</div>' +
           '<form id="kmsg-form" style="display:flex;gap:.5rem;align-items:flex-end;">' +
             '<textarea id="kmsg-input" rows="1" placeholder="Type a message…" style="flex:1;resize:none;max-height:7.5rem;border:1px solid rgba(210,224,215,.6);border-radius:10px;padding:.625rem .75rem;font:inherit;font-size:.8125rem;background:#fff;"></textarea>' +
             '<button type="submit" id="kmsg-send" style="background:var(--gd);color:#fff;border:none;border-radius:10px;padding:.625rem 1rem;font-size:.8125rem;font-weight:700;cursor:pointer;">Send</button>' +
@@ -7800,6 +7832,22 @@ document.addEventListener('DOMContentLoaded', async function() {
       var form  = overlay.querySelector('#kmsg-form');
       var input = overlay.querySelector('#kmsg-input');
       form.addEventListener('submit', function(ev){ ev.preventDefault(); submitMessage(); });
+
+      // Build the quick-reply chips (DOM, so labels/expansions need no escaping)
+      // and wire the reopen toggle. Chips only populate the composer.
+      var chipsRow = overlay.querySelector('#kmsg-chips');
+      if (chipsRow){
+        QUICK_REPLIES.forEach(function(q){
+          var b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'kmsg-qr-chip';
+          b.textContent = q.label;
+          b.addEventListener('click', function(){ applyQuickReply(q.text); });
+          chipsRow.appendChild(b);
+        });
+      }
+      var chipsToggle = overlay.querySelector('#kmsg-chips-toggle');
+      if (chipsToggle) chipsToggle.addEventListener('click', reopenChips);
       input.addEventListener('keydown', function(ev){
         if (ev.key === 'Enter' && !ev.shiftKey){ ev.preventDefault(); submitMessage(); }
         // auto-grow
@@ -7901,11 +7949,61 @@ document.addEventListener('DOMContentLoaded', async function() {
       renderMessages(convId);
     }
 
+    // Count messages the current broker has sent in this conversation. Uses the
+    // real cache (MESSAGES_BY_CONV) + field (sender_id), so it never silently
+    // returns 0. Counts the optimistic row too — sending immediately collapses.
+    function countOutbound(convId){
+      var uid = currentUid();
+      var rows = MESSAGES_BY_CONV[convId] || [];
+      var n = 0;
+      for (var i = 0; i < rows.length; i++){ if (rows[i].sender_id === uid) n++; }
+      return n;
+    }
+
+    // Populate the composer with a chip's full sentence (no auto-send, so the
+    // existing send-guard still applies), focus it, and put the cursor at the end.
+    function applyQuickReply(text){
+      var input = document.getElementById('kmsg-input');
+      if (!input) return;
+      input.value = text;
+      input.focus();
+      try { input.setSelectionRange(text.length, text.length); } catch(e){}
+      // Replicate the composer's auto-grow (it lives on the keydown handler).
+      input.style.height = 'auto';
+      input.style.height = Math.min(120, input.scrollHeight) + 'px';
+    }
+
+    // Manual reopen after collapse: capture the current outbound count as the
+    // baseline so the next real send (count > baseline) re-collapses.
+    function reopenChips(){
+      var convId = CURRENT_CONV_ID;
+      if (!convId) return;
+      chipReopen.convId = convId;
+      chipReopen.baseline = countOutbound(convId);
+      updateChipVisibility(convId);
+    }
+
+    // Show the chip row until the broker has sent their first message; then show
+    // the "Suggested questions" pill instead — unless they manually reopened it
+    // (and haven't sent since). Robust to the optimistic+echo transient double.
+    function updateChipVisibility(convId){
+      var row = document.getElementById('kmsg-chips');
+      var toggle = document.getElementById('kmsg-chips-toggle');
+      if (!row && !toggle) return;
+      var n = countOutbound(convId);
+      if (n === 0 && chipReopen.convId === convId){ chipReopen.convId = null; chipReopen.baseline = 0; }
+      var reopened = (chipReopen.convId === convId) && (n <= chipReopen.baseline);
+      var expanded = (n === 0) || reopened;
+      if (row)    row.style.display    = expanded ? 'flex' : 'none';
+      if (toggle) toggle.style.display = expanded ? 'none' : 'inline-flex';
+    }
+
     function renderMessages(convId){
       var body = document.getElementById('kmsg-body');
       if (!body) return;
       var rows = MESSAGES_BY_CONV[convId] || [];
       var uid = currentUid();
+      updateChipVisibility(convId); // hook: recompute chip/pill state each render
       body.innerHTML = '';
       if (!rows.length){
         var empty = document.createElement('div');

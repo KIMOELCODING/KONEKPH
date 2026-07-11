@@ -7518,6 +7518,8 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     var CONVERSATIONS = [];        // [{id, other_id, other_name, other_avatar, other_license, last_message_at, last_message_preview, unread, last_read_at}]
     var MESSAGES_BY_CONV = {};     // cache per conversation_id → [{id, sender_id, body, attachment_listing_id, created_at}]
+    var SEARCH = { active:false, q:'' };  // Phase 5 — in-thread search state (client-side, current conv only)
+    var CURRENT_PROP_LID = null;          // Phase 5 — thread's listing id for the header shortcut
     var CURRENT_CONV_ID = null;    // selected conversation
     var channel = null;
     var subscribedUid = null;
@@ -7854,6 +7856,17 @@ document.addEventListener('DOMContentLoaded', async function() {
           // rows keep their inline highlight; only inactive rows pick up the tint).
           '.kmsg-item{transition:transform .15s ease,background .15s ease;}' +
           '.kmsg-item:hover{transform:translateY(-1px);background:rgba(234,245,238,.5);}' +
+          // Phase 5 — slim in-thread search strip (below header, above messages);
+          // inner content capped to the same ~940px column as the bubbles.
+          '#kmsg-search-bar{display:none;padding:.5rem .75rem;border-bottom:1px solid rgba(210,224,215,.4);background:rgba(255,255,255,.55);flex-shrink:0;}' +
+          '#kmsg-search-inner{display:flex;align-items:center;gap:.5rem;max-width:940px;margin:0 auto;}' +
+          '#kmsg-search-wrap{display:flex;align-items:center;gap:.5rem;flex:1;min-width:0;background:#fff;border:1px solid rgba(210,224,215,.6);border-radius:10px;padding:.4375rem .625rem;}' +
+          '#kmsg-search-wrap>i{font-size:.75rem;color:var(--tl);flex-shrink:0;}' +
+          '#kmsg-search-input{flex:1;min-width:0;border:none;outline:none;background:transparent;font:inherit;font-size:.8125rem;color:var(--td);}' +
+          '#kmsg-search-count{font-size:.6875rem;color:var(--tl);font-variant-numeric:tabular-nums;white-space:nowrap;flex-shrink:0;}' +
+          '#kmsg-search-close{width:1.75rem;height:1.75rem;border:none;border-radius:50%;background:rgba(255,255,255,.55);color:var(--tm);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:.8125rem;flex-shrink:0;}' +
+          '#kmsg-search-close:hover{background:rgba(234,245,238,.9);}' +
+          '#kmsg-body mark{background:#ffe58a;color:inherit;border-radius:3px;padding:0 1px;}' +
         '</style>' +
         '<div id="kmsg-header" style="padding:.875rem 1.125rem;border-bottom:1px solid rgba(210,224,215,.4);background:rgba(255,255,255,.6);display:flex;align-items:center;gap:.625rem;flex-shrink:0;">' +
           '<div id="kmsg-hdr-empty" style="font-size:.8125rem;color:var(--tm);">Select a conversation to start messaging.</div>' +
@@ -7865,8 +7878,22 @@ document.addEventListener('DOMContentLoaded', async function() {
           // Right-side header actions (shown only when a conversation is open).
           // Search is a Phase-C placeholder; the 3-dot opens the details drawer.
           '<div id="kmsg-hdr-actions" style="display:none;align-items:center;gap:.375rem;flex-shrink:0;">' +
-            '<button id="kmsg-search-btn" type="button" title="Search (coming soon)" aria-label="Search conversation" style="width:2.25rem;height:2.25rem;border:none;border-radius:50%;background:rgba(255,255,255,.55);color:var(--tm);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:.875rem;"><i class="fa-solid fa-magnifying-glass"></i></button>' +
+            // Phase 5 — property shortcut; shown by updatePropShortcut() only when
+            // the thread has an associated listing. Click reuses openDetail().
+            '<button id="kmsg-prop-btn" type="button" title="View property" aria-label="View property" style="display:none;width:2.25rem;height:2.25rem;border:none;border-radius:50%;background:rgba(255,255,255,.55);color:var(--tm);cursor:pointer;align-items:center;justify-content:center;font-size:.8125rem;"><i class="fa-solid fa-house"></i></button>' +
+            '<button id="kmsg-search-btn" type="button" title="Search conversation" aria-label="Search conversation" style="width:2.25rem;height:2.25rem;border:none;border-radius:50%;background:rgba(255,255,255,.55);color:var(--tm);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:.875rem;"><i class="fa-solid fa-magnifying-glass"></i></button>' +
             '<button id="kmsg-menu-btn" type="button" title="Details" aria-label="Conversation details" style="width:2.25rem;height:2.25rem;border:none;border-radius:50%;background:rgba(255,255,255,.55);color:var(--tm);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:.9375rem;"><i class="fa-solid fa-ellipsis-vertical"></i></button>' +
+          '</div>' +
+        '</div>' +
+        // Phase 5 — inline in-thread search bar (hidden until the search icon is
+        // clicked / Ctrl+K). Filters the current conversation client-side.
+        '<div id="kmsg-search-bar">' +
+          '<div id="kmsg-search-inner">' +
+            '<div id="kmsg-search-wrap"><i class="fa-solid fa-magnifying-glass"></i>' +
+              '<input id="kmsg-search-input" type="text" placeholder="Search this conversation…" autocomplete="off" aria-label="Search this conversation">' +
+            '</div>' +
+            '<span id="kmsg-search-count"></span>' +
+            '<button id="kmsg-search-close" type="button" title="Close search" aria-label="Close search"><i class="fa-solid fa-xmark"></i></button>' +
           '</div>' +
         '</div>' +
         '<div id="kmsg-body-wrap">' +
@@ -7932,10 +7959,38 @@ document.addEventListener('DOMContentLoaded', async function() {
       });
       refreshSendUI(); // initial state (empty → disabled look)
 
-      // Header actions: search (Phase-C placeholder) + 3-dot details drawer.
+      // Header actions: search (Phase 5, real in-thread search) + 3-dot drawer.
       var searchBtn = overlay.querySelector('#kmsg-search-btn');
       if (searchBtn) searchBtn.addEventListener('click', function(){
-        if (typeof window.showToast === 'function') window.showToast('In-conversation search is coming soon');
+        if (SEARCH.active) closeSearch(); else openSearch();
+      });
+      var searchInput = overlay.querySelector('#kmsg-search-input');
+      if (searchInput){
+        searchInput.addEventListener('input', onSearchInput);
+        searchInput.addEventListener('keydown', function(ev){
+          if (ev.key === 'Escape' || ev.key === 'Esc'){ ev.preventDefault(); closeSearch(); }
+        });
+      }
+      var searchClose = overlay.querySelector('#kmsg-search-close');
+      if (searchClose) searchClose.addEventListener('click', closeSearch);
+
+      // Phase 5 — property shortcut: reuse openDetail() for the thread's listing.
+      var propBtn = overlay.querySelector('#kmsg-prop-btn');
+      if (propBtn) propBtn.addEventListener('click', function(){
+        if (CURRENT_PROP_LID && typeof window.openDetail === 'function') window.openDetail(CURRENT_PROP_LID);
+      });
+
+      // Phase 5 — Ctrl/Cmd+K focuses in-thread search when the Messages page is
+      // active and a conversation is open. No collision (globals handle only
+      // Enter-on-signup and Escape). ensurePanelLayout runs once, so this
+      // document listener registers a single time.
+      document.addEventListener('keydown', function(ev){
+        if (ev.key !== 'k' && ev.key !== 'K') return;
+        if (!(ev.ctrlKey || ev.metaKey) || ev.altKey || ev.shiftKey) return;
+        var pg = document.getElementById('page-messages');
+        if (!pg || !pg.classList.contains('active') || !CURRENT_CONV_ID) return;
+        ev.preventDefault();
+        openSearch();
       });
       var menuBtn = overlay.querySelector('#kmsg-menu-btn');
       if (menuBtn) menuBtn.addEventListener('click', function(){
@@ -7949,6 +8004,12 @@ document.addEventListener('DOMContentLoaded', async function() {
       // Expose the active conversation so the details drawer + photo viewer
       // (in the k-chat-drawer block) can read name/avatar/license on demand.
       window.__kmsgActiveConv = conv || null;
+      // Phase 5 — a stale search query must never filter a freshly opened thread;
+      // reset UI here (loadMessages → renderMessages repaints the full thread).
+      // The property shortcut is hidden until renderMessages resolves the listing.
+      resetSearchUI();
+      var propBtn0 = document.getElementById('kmsg-prop-btn');
+      if (propBtn0) propBtn0.style.display = 'none';
       var emptyHdr = document.getElementById('kmsg-hdr-empty');
       var av       = document.getElementById('kmsg-hdr-av');
       var info     = document.getElementById('kmsg-hdr-info');
@@ -8121,17 +8182,29 @@ document.addEventListener('DOMContentLoaded', async function() {
     function renderMessages(convId){
       var body = document.getElementById('kmsg-body');
       if (!body) return;
-      var rows = MESSAGES_BY_CONV[convId] || [];
+      var allRows = MESSAGES_BY_CONV[convId] || [];
       var uid = currentUid();
       updateChipVisibility(convId); // hook: recompute chip/pill state each render
+      if (convId === CURRENT_CONV_ID) updatePropShortcut(convId); // Phase 5 — header property shortcut
+
+      // Phase 5 — in-thread search (client-side, current conversation only). When
+      // active, render only body-substring matches and highlight them. The full
+      // cache (MESSAGES_BY_CONV) is never mutated, so closing search re-runs this
+      // function against allRows and restores the exact normal thread.
+      var searching = !!(SEARCH.active && SEARCH.q && convId === CURRENT_CONV_ID);
+      var rows = allRows;
+      if (searching){
+        var lq = SEARCH.q.toLowerCase();
+        rows = allRows.filter(function(m){ return m.body && m.body.toLowerCase().indexOf(lq) !== -1; });
+        updateSearchCount(rows.length);
+      }
       body.innerHTML = '';
       if (!rows.length){
         var empty = document.createElement('div');
         empty.style.cssText = 'padding:1.75rem .5rem;text-align:center;color:var(--tm);font-size:.7813rem;';
-        empty.textContent = 'No messages yet — say hi!';
+        empty.textContent = searching ? 'No matches in this conversation.' : 'No messages yet — say hi!';
         body.appendChild(empty);
-        renderCountByConv[convId] = 0;
-        updateJumpPill();
+        if (!searching){ renderCountByConv[convId] = 0; updateJumpPill(); }
         return;
       }
       // Group consecutive messages from the same sender within a 5-minute window
@@ -8149,9 +8222,13 @@ document.addEventListener('DOMContentLoaded', async function() {
         body.appendChild(buildBubble(m, m.sender_id === uid, {
           clusterStart: newCluster,
           topGap: newCluster && i > 0,
-          lastOfCluster: lastOfCluster
+          lastOfCluster: lastOfCluster,
+          highlight: searching ? SEARCH.q : null
         }));
       });
+      // Phase 5 — while searching, show matches from the top and skip the
+      // scroll-follow / new-message bookkeeping so search never perturbs it.
+      if (searching){ body.scrollTop = 0; return; }
       // Phase 2 — only follow to the bottom when the user is already near it, or
       // when the newest message is their own send (you always follow your own).
       // Otherwise leave scroll where they put it; flag an inbound arrival so the
@@ -8233,7 +8310,10 @@ document.addEventListener('DOMContentLoaded', async function() {
 
       if (m.body){
         var text = document.createElement('div');
-        text.textContent = m.body;
+        // Phase 5 — highlight search matches (highlightBody escapes every segment,
+        // so it's XSS-safe). No highlight query → plain textContent, unchanged.
+        var hl = opts.highlight ? highlightBody(m.body, opts.highlight) : null;
+        if (hl != null) text.innerHTML = hl; else text.textContent = m.body;
         text.style.whiteSpace = 'pre-wrap';
         text.style.wordBreak = 'break-word';
         bubble.appendChild(text);
@@ -8255,6 +8335,81 @@ document.addEventListener('DOMContentLoaded', async function() {
       }
 
       return wrap;
+    }
+
+    // ---- Phase 5 helpers: in-thread search + property shortcut ---------------
+
+    // Escape text, then wrap case-insensitive matches of q in <mark>. Segment
+    // splitting keeps escaping correct (each slice is escaped independently), so
+    // query characters like & or < can't break out. Returns null when there's no
+    // query — callers fall back to plain textContent.
+    function highlightBody(text, q){
+      if (!q) return null;
+      var src = String(text), lower = src.toLowerCase(), lq = q.toLowerCase();
+      var out = '', i = 0, idx;
+      while ((idx = lower.indexOf(lq, i)) !== -1){
+        out += esc(src.slice(i, idx)) + '<mark>' + esc(src.slice(idx, idx + lq.length)) + '</mark>';
+        i = idx + lq.length;
+      }
+      out += esc(src.slice(i));
+      return out;
+    }
+
+    function updateSearchCount(n){
+      var el = document.getElementById('kmsg-search-count');
+      if (!el) return;
+      el.textContent = SEARCH.q ? (n === 0 ? 'No matches' : (n + (n === 1 ? ' match' : ' matches'))) : '';
+    }
+
+    // Reset search state + UI WITHOUT re-rendering (used on conversation switch,
+    // where loadMessages → renderMessages will paint the fresh full thread).
+    function resetSearchUI(){
+      SEARCH.active = false; SEARCH.q = '';
+      var bar = document.getElementById('kmsg-search-bar'); if (bar) bar.style.display = 'none';
+      var inp = document.getElementById('kmsg-search-input'); if (inp) inp.value = '';
+      var cnt = document.getElementById('kmsg-search-count'); if (cnt) cnt.textContent = '';
+    }
+
+    function openSearch(){
+      if (!CURRENT_CONV_ID) return;
+      var bar = document.getElementById('kmsg-search-bar');
+      var inp = document.getElementById('kmsg-search-input');
+      if (!bar || !inp) return;
+      SEARCH.active = true;
+      bar.style.display = 'block';
+      inp.focus(); try { inp.select(); } catch(e){}
+    }
+
+    function onSearchInput(){
+      var inp = document.getElementById('kmsg-search-input');
+      SEARCH.q = inp ? (inp.value || '').trim() : '';
+      if (!SEARCH.q) updateSearchCount(0);  // clears the count text (SEARCH.q empty)
+      renderMessages(CURRENT_CONV_ID);       // filtered when q set; full thread when cleared
+    }
+
+    // Close search and fully restore the normal thread. renderMessages re-runs
+    // against the untouched MESSAGES_BY_CONV cache → grouping/timestamps/receipts/
+    // cards all identical to before search opened.
+    function closeSearch(){
+      var wasActive = SEARCH.active;
+      resetSearchUI();
+      if (wasActive && CURRENT_CONV_ID) renderMessages(CURRENT_CONV_ID);
+    }
+
+    // The thread's property = the first message carrying an attachment_listing_id
+    // (the original inquiry). Returns null when the conversation has no listing.
+    function convListingId(convId){
+      var rows = MESSAGES_BY_CONV[convId] || [];
+      for (var i = 0; i < rows.length; i++){ if (rows[i].attachment_listing_id) return rows[i].attachment_listing_id; }
+      return null;
+    }
+
+    function updatePropShortcut(convId){
+      var btn = document.getElementById('kmsg-prop-btn');
+      if (!btn) return;
+      var lid = convListingId(convId);
+      CURRENT_PROP_LID = lid;
+      btn.style.display = lid ? 'inline-flex' : 'none';
     }
 
     // Keep communication on-platform: block messages that carry off-platform

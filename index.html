@@ -5652,22 +5652,9 @@ document.addEventListener('DOMContentLoaded', async function() {
           viewBtn.onclick = function(){ if (window.goTo) window.goTo('broker'); };
         }
       }
-      // "Report this listing" — opens the report overlay (k-report). Created once
-      // per detail page; hidden on your own listing (you can't report yourself).
-      var repBtn = page.querySelector('#k-report-btn');
-      if (!repBtn){
-        repBtn = document.createElement('button');
-        repBtn.id = 'k-report-btn';
-        repBtn.type = 'button';
-        repBtn.innerHTML = '<i class="fa-solid fa-flag"><\/i> Report this listing';
-        repBtn.style.cssText = 'align-items:center;justify-content:center;gap:.4375rem;width:100%;margin-top:.5rem;padding:.5625rem .6875rem;background:none;border:1px solid var(--br,#d4dcd4);border-radius:10px;color:var(--tm,#4a5a4a);font:600 12.5px/1 Inter,-apple-system,BlinkMacSystemFont,sans-serif;cursor:pointer;';
-        if (cta && cta.parentNode) cta.parentNode.appendChild(repBtn);
-        else if (brokerForm && brokerForm.parentNode) brokerForm.parentNode.appendChild(repBtn);
-      }
-      if (repBtn){
-        repBtn.style.display = ownListing ? 'none' : 'flex';
-        repBtn.onclick = function(){ if (window.__konekOpenReport) window.__konekOpenReport(row.id); };
-      }
+      // (Broker-card "Report this listing" removed in the Same-Broker Phase 1
+      // revision — reporting stays available via the Save-row Report button,
+      // which wireDetailReportBtn() wires to the same window.__konekOpenReport.)
       // Remember this listing's broker for the broker-profile page (reached via
       // "From the Same Broker → View All") + paint the agent card with the real
       // broker. Cache by broker_id so repeated refreshes (reRenderCurrentPage)
@@ -5740,6 +5727,131 @@ document.addEventListener('DOMContentLoaded', async function() {
       }
       rows.forEach(function(r){ container.appendChild(buildSimCard(mapRow(r))); });
     }
+
+    // ---- Same-Broker section (Phase 1) — scoped to #ld-same-broker only. ------
+    // These wrap the same-broker call site; they never touch fillRelated,
+    // buildSimCard, or the Similar Listings section.
+
+    // The same-broker header is the .ld-sh-sim-header immediately before the grid
+    // (or before the compact card once it's inserted). Guarded so we never grab
+    // the Similar Listings header (which precedes .ld-sh-similar-scroll).
+    function sbHeaderOf(sbEl){
+      var card = document.getElementById('ld-sb-broker-card');
+      var h = card ? card.previousElementSibling : (sbEl ? sbEl.previousElementSibling : null);
+      return (h && h.classList && h.classList.contains('ld-sh-sim-header')) ? h : null;
+    }
+
+    // Create the compact broker card once, as a SIBLING between the same-broker
+    // header and #ld-same-broker (not a grid child — so desktop grid + mobile
+    // swipe-rail layouts of the tiles are unaffected). Returns the element.
+    function ensureSbBrokerCard(sbEl){
+      var card = document.getElementById('ld-sb-broker-card');
+      if (card) return card;
+      card = document.createElement('div');
+      card.id = 'ld-sb-broker-card';
+      card.className = 'ld-sh-agent-card';
+      // Compact overrides of the template agent-card look.
+      card.style.cssText = 'margin:.75rem 0 1.125rem;padding:.75rem .875rem;';
+      card.innerHTML =
+        '<div class="ld-sh-agent-row" style="margin-bottom:.6875rem;gap:.625rem;">' +
+          '<img class="ld-sb-av" alt="" style="width:2.75rem;height:2.75rem;border-radius:50%;object-fit:cover;flex-shrink:0;background:rgba(63,168,95,.1);">' +
+          '<div style="min-width:0;">' +
+            '<div class="ld-sh-agent-name ld-sb-name" style="font-size:.8438rem;">ProList Broker</div>' +
+            '<div class="ld-sh-agent-role ld-sb-role">Certified Broker</div>' +
+          '</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:.5rem;">' +
+          '<button type="button" class="ld-sh-cta ld-sb-inquire" style="margin-bottom:0;padding:.5625rem;font-size:.8125rem;flex:1;"><i class="fa-regular fa-comment-dots"></i> Inquire</button>' +
+          '<button type="button" class="ld-sh-cta2 ld-sb-profile" style="padding:.5625rem;font-size:.75rem;flex:1;"><i class="fa-solid fa-user"></i> View Profile</button>' +
+        '</div>';
+      sbEl.parentNode.insertBefore(card, sbEl);
+      return card;
+    }
+
+    // Paint avatar / name / role+badge from a broker object (mirrors
+    // applyDetailBroker's derivation). Visual only — no handler wiring — so it's
+    // safe to call again when the async broker fetch resolves.
+    function paintSbBrokerVisual(card, b){
+      if (!card) return;
+      b = b || {};
+      var nameEl = card.querySelector('.ld-sb-name');
+      if (nameEl) nameEl.textContent = b.name || 'ProList Broker';
+      var roleEl = card.querySelector('.ld-sb-role');
+      if (roleEl){
+        roleEl.innerHTML = '';
+        roleEl.appendChild(document.createTextNode('Certified Broker'));
+        if (b.license){
+          var vb = document.createElement('span');
+          vb.className = 'ld-sh-verified';
+          vb.innerHTML = '<i class="fa-solid fa-circle-check"></i> License Verified';
+          roleEl.appendChild(vb);
+        }
+      }
+      var avEl = card.querySelector('.ld-sb-av');
+      if (avEl){
+        var initials = (((b.first_name || ' ')[0] || '') + ((b.last_name || ' ')[0] || '')).toUpperCase().trim() || 'K';
+        var initialsSvg = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80"><rect width="80" height="80" fill="#4a7c59"/><text x="50%" y="54%" text-anchor="middle" dominant-baseline="middle" font-family="system-ui,sans-serif" font-size="30" font-weight="800" fill="#e7f3eb">' + initials + '</text></svg>');
+        var real = '';
+        if (b.avatar_url){
+          if (b.avatar_url.indexOf('data:') === 0 || b.avatar_url.indexOf('http') === 0) real = b.avatar_url;
+          else { real = window.__plImg('avatars', b.avatar_url, 160, 160); }
+        }
+        avEl.onerror = function(){ this.onerror = null; this.src = initialsSvg; };
+        avEl.src = real || initialsSvg;
+      }
+    }
+
+    // Wire the two buttons to the SAME handlers the main broker card uses. Owner
+    // viewing their own listing: hide Inquire (can't inquire to yourself), mirror
+    // of the main card. Called where `row` is in scope.
+    function wireSbBrokerCard(card, row){
+      if (!card) return;
+      var myId = window.__currentUser && window.__currentUser.id;
+      var own = !!(myId && row.broker_id === myId);
+      var inq = card.querySelector('.ld-sb-inquire');
+      var prof = card.querySelector('.ld-sb-profile');
+      if (inq){
+        inq.style.display = own ? 'none' : '';
+        inq.onclick = function(ev){
+          if (ev && ev.preventDefault) ev.preventDefault();
+          if (typeof window.__konekStartChat === 'function'){
+            var loc = [row.barangay, row.city, row.province].filter(Boolean).join(', ');
+            window.__konekStartChat({
+              brokerId: row.broker_id,
+              listingId: row.id,
+              listingTitle: row.title || '',
+              listingLoc: loc,
+              listingPrice: '₱' + Number(row.price || 0).toLocaleString('en-PH')
+            });
+          }
+        };
+      }
+      if (prof) prof.onclick = function(){ if (window.goTo) window.goTo('broker'); };
+    }
+
+    // Entry point for the same-broker result. Zero rows → hide header + card,
+    // show ONLY the existing empty state. Rows → show header, render compact
+    // card above the tiles, then delegate tiles to the shared fillRelated.
+    function renderSameBroker(sbEl, rows, row){
+      if (!sbEl) return;
+      var header = sbHeaderOf(sbEl);
+      if (!rows.length){
+        if (header) header.style.display = 'none';
+        var existing = document.getElementById('ld-sb-broker-card');
+        if (existing) existing.style.display = 'none';
+        fillRelated(sbEl, [], 'No other active listings from this broker.');
+        return;
+      }
+      if (header) header.style.display = '';
+      var card = ensureSbBrokerCard(sbEl);
+      if (card){
+        card.style.display = '';
+        paintSbBrokerVisual(card, window.__konekDetailBroker);
+        wireSbBrokerCard(card, row);
+      }
+      fillRelated(sbEl, rows, 'No other active listings from this broker.');
+    }
+
     var RELATED_COLS = 'id,title,barangay,city,province,price,bedrooms,bathrooms,floor_area_sqm,lot_area_sqm,images,featured,category,region';
     function renderDetailRelated(page, row){
       if (!window.sb) return;
@@ -5753,7 +5865,10 @@ document.addEventListener('DOMContentLoaded', async function() {
         window.sb.from('listings').select(RELATED_COLS)
           .eq('broker_id', row.broker_id).eq('status','active').neq('id', row.id)
           .order('created_at',{ascending:false}).limit(8)
-          .then(function(res){ fillRelated(sbEl, (res && res.data) || [], 'No other active listings from this broker.'); });
+          // Same-Broker Phase 1: renderSameBroker toggles the same-broker header +
+          // compact broker card, then delegates tile rendering to the SHARED
+          // fillRelated (unchanged). Similar Listings below is untouched.
+          .then(function(res){ renderSameBroker(sbEl, (res && res.data) || [], row); });
       }
 
       var simEl = page.querySelector('.ld-sh-similar-scroll');
@@ -5946,6 +6061,10 @@ document.addEventListener('DOMContentLoaded', async function() {
         avEl.src = real || initialsSvg;
       }
       if (typeof window.__konekRenderBrokerProfile === 'function') window.__konekRenderBrokerProfile();
+      // Same-Broker Phase 1: if the compact broker card is on-screen, repaint its
+      // visuals now that the real broker resolved (handlers stay as wired).
+      var sbCard = document.getElementById('ld-sb-broker-card');
+      if (sbCard && sbCard.style.display !== 'none') paintSbBrokerVisual(sbCard, b);
     }
     // Refresh the detail page's DATA only — do NOT re-run openDetail()/
     // openListingDetail(), which navigate + reset .ld-sh-body.scrollTop to 0

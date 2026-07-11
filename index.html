@@ -7556,6 +7556,20 @@ document.addEventListener('DOMContentLoaded', async function() {
     // at a sane 2000 both visually (counter) and in the send-guard.
     var MAX_MSG_LEN = 2000;
 
+    // Phase 3 — presence + last-seen. presenceChannel is a SEPARATE Realtime
+    // channel (not the messages sub, not the typing broadcast). onlineSet holds
+    // the uids currently tracked in presence. Away = untrack after idle; the
+    // last-seen RPC persists a low-frequency "last active" stamp.
+    var presenceChannel = null;
+    var presenceUid = null;              // join guard (once per uid)
+    var onlineSet = {};                  // uid -> true for brokers currently online
+    var presenceAway = false;
+    var awayTimer = null;                // 5-min idle → untrack
+    var lastSeenTimer = null;            // 60s interval → touch_last_seen
+    var presenceLifecycleWired = false;
+    var AWAY_MS = 5 * 60 * 1000;
+    var LASTSEEN_MS = 60 * 1000;
+
     function currentUid(){
       return (window.__currentUser && window.__currentUser.id) || null;
     }
@@ -7678,7 +7692,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (otherIds.length){
         var bd = await window.sb
           .from('broker_directory')
-          .select('id, first_name, last_name, license_number, avatar_url')
+          .select('id, first_name, last_name, license_number, avatar_url, last_seen_at')
           .in('id', otherIds);
         if (!bd.error) (bd.data || []).forEach(function(b){ brokerById[b.id] = b; });
       }
@@ -7704,6 +7718,7 @@ document.addEventListener('DOMContentLoaded', async function() {
           other_id: oid,
           other_name: otherName,
           other_license: (other && other.license_number) || '',
+          other_last_seen: (other && other.last_seen_at) || null,
           other_avatar: resolveAv(other && other.avatar_url, otherName),
           // Raw storage path/URL (already selected) so the photo viewer can
           // resolve a full-size image; other_avatar is only a 96px thumbnail.
@@ -7721,6 +7736,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       window.CONVERSATIONS = CONVERSATIONS;
       renderConvList();
       subscribeRealtime();
+      ensurePresence();  // Phase 3 — join the app-level presence channel once
     }
 
     function renderConvList(){
@@ -7751,7 +7767,10 @@ document.addEventListener('DOMContentLoaded', async function() {
         item.style.cssText = 'display:flex;gap:.75rem;padding:.75rem .875rem;cursor:pointer;border-bottom:1px solid rgba(210,224,215,.22);align-items:center;' +
           (active ? 'background:rgba(234,245,238,.7);box-shadow:inset 3px 0 0 var(--gd);' : '');
         item.innerHTML =
-          '<img src="' + esc(c.other_avatar || '') + '" alt="" style="width:2.5rem;height:2.5rem;border-radius:50%;flex-shrink:0;">' +
+          '<div style="position:relative;flex-shrink:0;">' +
+            '<img src="' + esc(c.other_avatar || '') + '" alt="" style="width:2.5rem;height:2.5rem;border-radius:50%;display:block;">' +
+            (onlineSet[c.other_id] ? '<span title="Active now" style="position:absolute;right:-1px;bottom:-1px;width:.75rem;height:.75rem;border-radius:50%;background:#25c26e;border:2px solid #fff;"></span>' : '') +
+          '</div>' +
           '<div style="flex:1;min-width:0;">' +
             '<div style="display:flex;gap:.5rem;align-items:center;">' +
               '<div style="font-size:.8438rem;font-weight:700;color:' + (active ? 'var(--gd)' : 'var(--td)') + ';flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(c.other_name) + '</div>' +
@@ -7948,12 +7967,9 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (info) info.style.display = '';
       if (actions) actions.style.display = 'flex';
       if (nm) nm.textContent = conv.other_name;
-      // Privacy: never expose the peer's raw PRC number in Messages. Show the
-      // same credibility indicator the public property view uses (License
-      // Verified badge) when they have a license number on file.
-      if (meta) meta.innerHTML = conv.other_license
-        ? '<span style="display:inline-flex;align-items:center;gap:.25rem;color:var(--gd);font-weight:700;"><i class="fa-solid fa-circle-check" style="font-size:.625rem;"></i>License Verified</span>'
-        : '';
+      // Phase 3 — presence-aware meta: "Active now" / "Active … ago" / the
+      // License-Verified badge fallback (still never exposes the raw PRC number).
+      renderHeaderMeta(conv);
       if (composer) composer.style.display = '';
     }
 
@@ -8334,6 +8350,120 @@ document.addEventListener('DOMContentLoaded', async function() {
       // Update local state so the sidebar pip clears.
       var c = CONVERSATIONS.find(function(x){ return x.id === convId; });
       if (c){ c.last_read_at = nowIso; c.unread = false; renderConvList(); }
+    }
+
+    // ─── Presence + last-seen (Phase 3) ───────────────────────────
+    // A dedicated 'presence:online' Realtime channel, separate from the messages
+    // postgres_changes sub and the typing broadcast. Joined once per session.
+    function touchLastSeen(){
+      try { if (window.sb) window.sb.rpc('touch_last_seen'); } catch(e){}
+    }
+
+    function rebuildOnline(){
+      onlineSet = {};
+      try {
+        var st = presenceChannel ? presenceChannel.presenceState() : {};
+        Object.keys(st || {}).forEach(function(k){
+          if (k) onlineSet[k] = true;                    // presence key = uid
+          (st[k] || []).forEach(function(m){ if (m && m.uid) onlineSet[m.uid] = true; });
+        });
+      } catch(e){}
+      updatePresenceUI();
+    }
+
+    function trackPresence(){
+      if (!presenceChannel) return;
+      var uid = currentUid();
+      if (!uid) return;
+      presenceAway = false;
+      try { presenceChannel.track({ uid: uid, state: 'active', at: Date.now() }); } catch(e){}
+    }
+    function untrackPresence(){
+      if (!presenceChannel) return;
+      presenceAway = true;
+      try { presenceChannel.untrack(); } catch(e){}   // peers see us drop → offline
+    }
+
+    // Any interaction keeps us online and resets the 5-min idle countdown; coming
+    // back from away re-tracks so we reappear online.
+    function markActivity(){
+      if (presenceAway) trackPresence();
+      if (awayTimer) clearTimeout(awayTimer);
+      awayTimer = setTimeout(untrackPresence, AWAY_MS);
+    }
+
+    function wirePresenceLifecycle(){
+      if (presenceLifecycleWired) return;
+      presenceLifecycleWired = true;
+      ['mousemove','mousedown','keydown','touchstart','scroll'].forEach(function(evt){
+        window.addEventListener(evt, markActivity, { passive: true });
+      });
+      document.addEventListener('visibilitychange', function(){
+        if (document.visibilityState === 'hidden'){ touchLastSeen(); }
+        else { markActivity(); touchLastSeen(); }
+      });
+      window.addEventListener('beforeunload', function(){ touchLastSeen(); untrackPresence(); });
+      if (lastSeenTimer) clearInterval(lastSeenTimer);
+      lastSeenTimer = setInterval(function(){
+        if (document.visibilityState === 'visible') touchLastSeen();
+      }, LASTSEEN_MS);
+      markActivity();   // start the idle countdown
+      touchLastSeen();  // stamp once on join
+    }
+
+    function ensurePresence(){
+      var uid = currentUid();
+      if (!uid || !window.sb) return;
+      if (presenceChannel && presenceUid === uid) return;   // already joined for this user
+      if (presenceChannel){ try { window.sb.removeChannel(presenceChannel); } catch(e){} presenceChannel = null; }
+      presenceUid = uid;
+      presenceChannel = window.sb.channel('presence:online', { config: { presence: { key: uid } } });
+      presenceChannel
+        .on('presence', { event: 'sync'  }, rebuildOnline)
+        .on('presence', { event: 'join'  }, rebuildOnline)
+        .on('presence', { event: 'leave' }, rebuildOnline)
+        .subscribe(function(status){
+          if (status === 'SUBSCRIBED'){ trackPresence(); wirePresenceLifecycle(); }
+        });
+    }
+
+    function updatePresenceUI(){
+      renderConvList();
+      if (CURRENT_CONV_ID){
+        var conv = CONVERSATIONS.find(function(c){ return c.id === CURRENT_CONV_ID; });
+        if (conv) renderHeaderMeta(conv);
+      }
+    }
+
+    // Compact relative time for the header ("Active … ago").
+    function fmtSince(iso){
+      if (!iso) return '';
+      var t = new Date(iso).getTime();
+      if (isNaN(t)) return '';
+      var s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+      if (s < 60) return 'just now';
+      var m = Math.floor(s / 60); if (m < 60) return m + 'm ago';
+      var h = Math.floor(m / 60); if (h < 24) return h + 'h ago';
+      var d = Math.floor(h / 24); if (d < 7) return d + 'd ago';
+      try { return 'on ' + new Date(iso).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' }); }
+      catch(e){ return d + 'd ago'; }
+    }
+
+    // Header meta: online → "Active now"; else last-seen → "Active … ago"; else
+    // the existing License-Verified badge (or nothing).
+    function renderHeaderMeta(conv){
+      var meta = document.getElementById('kmsg-hdr-meta');
+      if (!meta || !conv) return;
+      if (onlineSet[conv.other_id]){
+        meta.innerHTML = '<span style="display:inline-flex;align-items:center;gap:.3125rem;color:#1f9d57;font-weight:700;">' +
+          '<span style="width:.5rem;height:.5rem;border-radius:50%;background:#25c26e;box-shadow:0 0 0 3px rgba(37,194,110,.18);"></span>Active now</span>';
+      } else if (conv.other_last_seen){
+        meta.innerHTML = '<span style="color:var(--tl);">Active ' + esc(fmtSince(conv.other_last_seen)) + '</span>';
+      } else {
+        meta.innerHTML = conv.other_license
+          ? '<span style="display:inline-flex;align-items:center;gap:.25rem;color:var(--gd);font-weight:700;"><i class="fa-solid fa-circle-check" style="font-size:.625rem;"></i>License Verified</span>'
+          : '';
+      }
     }
 
     // ─── Realtime subscription ─────────────────────────────────────

@@ -2702,6 +2702,12 @@ document.addEventListener('DOMContentLoaded', async function() {
   (function(){
     var currentAg = null;
     var moaSigPad = null; // inline signature pad, mounted only when broker has none on file
+    // Dashboard view state (client-side only — filters/sorts the in-memory rows).
+    var moaAllRows = [];
+    var moaSearch  = '';
+    var moaFilter  = 'all';    // all | signed | sent | declined
+    var moaSort    = 'newest';  // newest | oldest | recentlySigned
+    var moaLoading = false;
 
     function openOverlay(id){
       if (typeof window.showModal === 'function') { window.showModal(id); return; }
@@ -2721,12 +2727,54 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (document.getElementById('k-moa-css')) return;
       var s = document.createElement('style'); s.id = 'k-moa-css';
       s.textContent =
-        '#page-moa{align-items:flex-start !important;justify-content:center !important;overflow-y:auto;padding:2rem 1rem;}' +
-        '.k-moa-card{display:flex;align-items:center;gap:.875rem;background:rgba(255,255,255,.65);backdrop-filter:blur(20px) saturate(180%);-webkit-backdrop-filter:blur(20px) saturate(180%);border:1px solid rgba(255,255,255,.8);border-radius:14px;padding:1rem 1.125rem;margin-bottom:.75rem;box-shadow:var(--sh,0 4px 16px rgba(0,0,0,.06));}' +
-        '.k-moa-card .k-moa-main{flex:1;min-width:0;}' +
-        '.k-moa-card h4{margin:0 0 .25rem;font-size:.9375rem;color:var(--td,#1a2a1a);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
-        '.k-moa-badge{display:inline-flex;align-items:center;gap:.375rem;font-size:.75rem;font-weight:600;}' +
-        '.k-moa-dot{width:.5rem;height:.5rem;border-radius:50%;display:inline-block;}';
+        '#page-moa{align-items:flex-start !important;justify-content:center !important;overflow-y:auto;padding:2.5rem 1rem;}' +
+        '.k-moa-wrap{max-width:75rem;width:100%;margin:0 auto;}' +
+        '.k-moa-head h2{margin:0 0 .25rem;font-size:1.5rem;color:var(--td,#1a2a1a);}' +
+        '.k-moa-head p{margin:0;color:var(--tm,#4a5a4a);}' +
+        // Summary stat cards
+        '.k-moa-stats{display:flex;flex-wrap:wrap;gap:1rem;margin:2rem 0;}' +
+        '.k-moa-stat{flex:1 1 180px;min-height:100px;display:flex;flex-direction:column;justify-content:center;gap:.375rem;background:rgba(255,255,255,.65);backdrop-filter:blur(20px) saturate(180%);-webkit-backdrop-filter:blur(20px) saturate(180%);border:1px solid rgba(255,255,255,.8);border-radius:16px;padding:1rem 1.25rem;box-shadow:0 4px 16px rgba(0,0,0,.05);transition:transform .18s ease,box-shadow .18s ease;}' +
+        '.k-moa-stat:hover{transform:translateY(-3px);box-shadow:0 10px 26px rgba(0,0,0,.09);}' +
+        '.k-moa-stat .n{font-size:1.875rem;font-weight:800;line-height:1;font-variant-numeric:tabular-nums;}' +
+        '.k-moa-stat .l{font-size:.75rem;font-weight:600;letter-spacing:.02em;text-transform:uppercase;color:var(--tm,#4a5a4a);display:inline-flex;align-items:center;gap:.4rem;}' +
+        '.k-moa-stat .l i{font-size:.6875rem;}' +
+        // Toolbar (search + filter chips + sort)
+        '.k-moa-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:.75rem;margin-bottom:1.5rem;}' +
+        '.k-moa-search{flex:1 1 220px;display:flex;align-items:center;gap:.5rem;background:#fff;border:1px solid var(--br,#d4dcd4);border-radius:10px;padding:.5rem .75rem;min-width:0;}' +
+        '.k-moa-search i{color:var(--tm,#8a9a8a);font-size:.8125rem;}' +
+        '.k-moa-search input{border:0;outline:0;background:transparent;font:inherit;font-size:.8125rem;flex:1;min-width:0;color:var(--td,#1a2a1a);}' +
+        '.k-moa-chips{display:inline-flex;flex-wrap:wrap;gap:.375rem;}' +
+        '.k-moa-chip{border:1px solid var(--br,#d4dcd4);background:rgba(255,255,255,.6);color:var(--tm,#4a5a4a);border-radius:999px;padding:.4375rem .875rem;font:inherit;font-size:.75rem;font-weight:600;cursor:pointer;transition:all .15s ease;white-space:nowrap;}' +
+        '.k-moa-chip:hover{border-color:var(--gd,#2a7a3d);color:var(--gd,#2a7a3d);}' +
+        '.k-moa-chip.on{background:var(--gd,#2a7a3d);border-color:var(--gd,#2a7a3d);color:#fff;}' +
+        '.k-moa-sort{border:1px solid var(--br,#d4dcd4);background:#fff;border-radius:10px;padding:.5rem .75rem;font:inherit;font-size:.8125rem;color:var(--td,#1a2a1a);cursor:pointer;}' +
+        // Agreement cards
+        '.k-moa-card{display:flex;align-items:center;gap:1rem;background:rgba(255,255,255,.68);backdrop-filter:blur(20px) saturate(180%);-webkit-backdrop-filter:blur(20px) saturate(180%);border:1px solid rgba(255,255,255,.85);border-radius:18px;padding:1rem 1.125rem;margin-bottom:1.25rem;box-shadow:0 8px 24px rgba(0,0,0,.06);transition:transform .18s ease,box-shadow .18s ease;}' +
+        '.k-moa-card:hover{transform:translateY(-4px);box-shadow:0 14px 32px rgba(0,0,0,.1);}' +
+        '.k-moa-thumb{width:5.5rem;height:5.5rem;border-radius:14px;object-fit:cover;flex-shrink:0;background:rgba(46,122,70,.08);}' +
+        '.k-moa-thumb-ph{width:5.5rem;height:5.5rem;border-radius:14px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:rgba(46,122,70,.08);color:var(--gl,#9bbf9b);font-size:1.75rem;}' +
+        '.k-moa-main{flex:1;min-width:0;}' +
+        '.k-moa-main h4{margin:0 0 .3125rem;font-size:1rem;color:var(--td,#1a2a1a);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+        '.k-moa-loc{display:flex;align-items:center;gap:.375rem;font-size:.8125rem;color:var(--tm,#4a5a4a);margin-bottom:.375rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+        '.k-moa-loc i{font-size:.6875rem;color:var(--gl,#9bbf9b);}' +
+        '.k-moa-date{font-size:.75rem;color:var(--tm,#8a9a8a);}' +
+        '.k-moa-side{display:flex;flex-direction:column;align-items:flex-end;gap:.625rem;flex-shrink:0;}' +
+        '.k-moa-pill{display:inline-flex;align-items:center;gap:.375rem;border-radius:999px;padding:.3125rem .6875rem;font-size:.6875rem;font-weight:700;white-space:nowrap;}' +
+        '.k-moa-pill .k-moa-dot{width:.4375rem;height:.4375rem;border-radius:50%;}' +
+        '.k-moa-card .k-btn{white-space:nowrap;font-size:.8125rem;padding:.5625rem 1rem;border-radius:10px;}' +
+        '.k-moa-declined{font-size:.75rem;color:var(--tm,#8a9a8a);font-style:italic;}' +
+        // Loading skeleton
+        '.k-moa-sk{position:relative;overflow:hidden;}' +
+        '.k-moa-sk::after{content:"";position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,rgba(255,255,255,.65),transparent);animation:kmoashimmer 1.3s infinite;}' +
+        '@keyframes kmoashimmer{100%{transform:translateX(100%)}}' +
+        '.k-moa-sk-line{height:.75rem;border-radius:6px;background:rgba(46,122,70,.1);}' +
+        // Empty state
+        '.k-moa-empty{text-align:center;padding:3.5rem 1rem;color:var(--tm,#4a5a4a);}' +
+        '.k-moa-empty .ic{font-size:2.75rem;margin-bottom:.75rem;color:var(--gl,#9bbf9b);}' +
+        '.k-moa-empty h3{margin:0 0 .375rem;color:var(--td,#1a2a1a);font-size:1.125rem;}' +
+        '.k-moa-empty p{margin:0;font-size:.875rem;}' +
+        // Responsive — stats wrap, cards single-column
+        '@media (max-width:640px){.k-moa-card{flex-wrap:wrap;align-items:flex-start;}.k-moa-thumb,.k-moa-thumb-ph{width:100%;height:8rem;}.k-moa-main{flex:1 1 100%;}.k-moa-side{flex-direction:row;align-items:center;width:100%;justify-content:space-between;}.k-moa-stat{flex:1 1 140px;}}';
       document.head.appendChild(s);
     }
 
@@ -2737,13 +2785,43 @@ document.addEventListener('DOMContentLoaded', async function() {
       var p = document.createElement('div');
       p.className = 'page'; p.id = 'page-moa';
       p.innerHTML =
-        '<div style="max-width:52.5rem;width:100%;margin:0 auto;">' +
-        '  <div style="margin-bottom:1.125rem;">' +
-        '    <h2 style="margin:0 0 .25rem;font-size:1.5rem;">Agreements (MOA)</h2>' +
-        '    <p style="margin:0;color:var(--tm,#4a5a4a);">Review and sign the Memorandum of Agreement for each listing. ProList publishes your listing to the public site once you sign.</p>' +
+        '<div class="k-moa-wrap">' +
+        '  <div class="k-moa-head">' +
+        '    <h2>Agreements (MOA)</h2>' +
+        '    <p>Review and sign the Memorandum of Agreement for each listing. ProList publishes your listing to the public site once you sign.</p>' +
+        '  </div>' +
+        '  <div id="k-moa-stats" class="k-moa-stats"></div>' +
+        '  <div id="k-moa-toolbar" class="k-moa-toolbar" style="display:none;">' +
+        '    <div class="k-moa-search"><i class="fa-solid fa-magnifying-glass"></i><input id="k-moa-q" type="text" placeholder="Search by property or location…" autocomplete="off" aria-label="Search agreements"></div>' +
+        '    <div class="k-moa-chips" id="k-moa-chips">' +
+        '      <button type="button" class="k-moa-chip on" data-f="all">All</button>' +
+        '      <button type="button" class="k-moa-chip" data-f="signed">Signed</button>' +
+        '      <button type="button" class="k-moa-chip" data-f="sent">Pending</button>' +
+        '      <button type="button" class="k-moa-chip" data-f="declined">Declined</button>' +
+        '    </div>' +
+        '    <select id="k-moa-sort" class="k-moa-sort" aria-label="Sort agreements">' +
+        '      <option value="newest">Newest</option>' +
+        '      <option value="oldest">Oldest</option>' +
+        '      <option value="recentlySigned">Recently Signed</option>' +
+        '    </select>' +
         '  </div>' +
         '  <div id="k-moa-list"></div>' +
         '</div>';
+
+      // Wire toolbar once (re-renders only touch #k-moa-stats / #k-moa-list, so
+      // the search input keeps focus + caret across list re-renders).
+      var q = p.querySelector('#k-moa-q');
+      if (q) q.addEventListener('input', function(){ moaSearch = (q.value || '').trim().toLowerCase(); applyView(); });
+      var chips = p.querySelector('#k-moa-chips');
+      if (chips) chips.addEventListener('click', function(e){
+        var btn = e.target.closest('.k-moa-chip'); if (!btn) return;
+        moaFilter = btn.getAttribute('data-f') || 'all';
+        chips.querySelectorAll('.k-moa-chip').forEach(function(c){ c.classList.toggle('on', c === btn); });
+        applyView();
+      });
+      var sortSel = p.querySelector('#k-moa-sort');
+      if (sortSel) sortSel.addEventListener('change', function(){ moaSort = sortSel.value; applyView(); });
+
       main.appendChild(p);
     }
 
@@ -2907,58 +2985,161 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (r.data && r.data.signedUrl) window.open(r.data.signedUrl, '_blank', 'noopener');
     }
 
-    function renderList(rows){
+    function escapeHtml(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+
+    // ---- dashboard helpers (presentation only — data + signing flow unchanged) --
+    function locOf(l){ if (!l) return ''; return [l.city, l.province].filter(Boolean).join(', '); }
+    function dt(s){ var t = s ? Date.parse(s) : NaN; return isNaN(t) ? 0 : t; }
+
+    // Exactly three badge types. sent -> Pending, signed -> Signed, declined -> Declined.
+    function badgeHtml(st){
+      var map = {
+        signed:   ['Signed',   '#16a34a', 'rgba(22,163,74,.12)'],
+        sent:     ['Pending',  '#d97706', 'rgba(217,119,6,.13)'],
+        declined: ['Declined', '#dc2626', 'rgba(220,38,38,.10)']
+      };
+      var d = map[st] || map.sent;
+      return '<span class="k-moa-pill" style="color:' + d[1] + ';background:' + d[2] + ';">' +
+        '<span class="k-moa-dot" style="background:' + d[1] + ';"></span>' + d[0] + '</span>';
+    }
+
+    function emptyHtml(iconCls, h, sub){
+      return '<div class="k-moa-empty"><div class="ic"><i class="' + iconCls + '"></i></div>' +
+        '<h3>' + escapeHtml(h) + '</h3><p>' + escapeHtml(sub) + '</p></div>';
+    }
+
+    function buildCard(ag){
+      var l = ag.listings || {};
+      var title = l.title || 'Listing';
+      var st = ag.status;
+      var img = (l.images && l.images.length && typeof window.__plImg === 'function')
+        ? window.__plImg('listing-images', l.images[0], 200, 200) : '';
+      var thumb = img
+        ? '<img class="k-moa-thumb" src="' + escapeHtml(img) + '" alt="">'
+        : '<div class="k-moa-thumb-ph"><i class="fa-solid fa-house"></i></div>';
+      var loc = locOf(l);
+      var dateLine = st === 'signed'   ? 'Signed ' + fmtD(ag.broker_signed_at)
+                   : st === 'declined' ? 'Declined' + (ag.sent_at ? (' · Sent ' + fmtD(ag.sent_at)) : '')
+                   :                     'Sent ' + fmtD(ag.sent_at);
+
+      var card = document.createElement('div'); card.className = 'k-moa-card';
+      card.innerHTML =
+        thumb +
+        '<div class="k-moa-main">' +
+          '<h4>' + escapeHtml(title) + '</h4>' +
+          (loc ? '<div class="k-moa-loc"><i class="fa-solid fa-location-dot"></i>' + escapeHtml(loc) + '</div>' : '') +
+          '<div class="k-moa-date">' + escapeHtml(dateLine) + '</div>' +
+        '</div>' +
+        '<div class="k-moa-side" data-side>' + badgeHtml(st) + '</div>';
+
+      var side = card.querySelector('[data-side]');
+      if (st === 'sent') {
+        var b = document.createElement('button'); b.className = 'k-btn k-btn-primary';
+        b.innerHTML = '<i class="fa-solid fa-file-signature"></i> Review &amp; Sign';
+        b.addEventListener('click', function(){ openReview(ag); });   // existing flow
+        side.appendChild(b);
+      } else if (st === 'signed') {
+        var v = document.createElement('button'); v.className = 'k-btn k-btn-ghost';
+        v.innerHTML = '<i class="fa-regular fa-file-lines"></i> View Agreement';
+        v.addEventListener('click', function(){ openSigned(ag); });   // existing flow
+        side.appendChild(v);
+      } else {
+        var m = document.createElement('span'); m.className = 'k-moa-declined';
+        m.textContent = 'No action needed';
+        side.appendChild(m);
+      }
+      return card;
+    }
+
+    // 'loading' | 'empty' | 'data' — toggles the stats strip + toolbar chrome.
+    function setChrome(mode){
+      var stats = document.getElementById('k-moa-stats');
+      var tb = document.getElementById('k-moa-toolbar');
+      if (stats) stats.style.display = (mode === 'empty') ? 'none' : 'flex';
+      if (tb)    tb.style.display    = (mode === 'data')  ? 'flex' : 'none';
+    }
+
+    function renderStats(){
+      var el = document.getElementById('k-moa-stats'); if (!el) return;
+      var rows = moaAllRows;
+      var c = function(s){ return rows.filter(function(a){ return a.status === s; }).length; };
+      var defs = [
+        ['Total',    rows.length, 'fa-file-lines',   'var(--gd,#2a7a3d)'],
+        ['Signed',   c('signed'), 'fa-circle-check', '#16a34a'],
+        ['Pending',  c('sent'),   'fa-clock',        '#d97706'],
+        ['Declined', c('declined'),'fa-circle-xmark','#dc2626']
+      ];
+      el.innerHTML = defs.map(function(d){
+        return '<div class="k-moa-stat"><span class="n" style="color:' + d[3] + ';">' + d[1] + '</span>' +
+          '<span class="l"><i class="fa-solid ' + d[2] + '" style="color:' + d[3] + ';"></i>' + d[0] + '</span></div>';
+      }).join('');
+    }
+
+    function skCard(){
+      return '<div class="k-moa-card" style="pointer-events:none;">' +
+        '<div class="k-moa-thumb-ph k-moa-sk"></div>' +
+        '<div class="k-moa-main">' +
+          '<div class="k-moa-sk-line k-moa-sk" style="width:55%;height:1rem;margin-bottom:.5rem;"></div>' +
+          '<div class="k-moa-sk-line k-moa-sk" style="width:35%;margin-bottom:.5rem;"></div>' +
+          '<div class="k-moa-sk-line k-moa-sk" style="width:25%;"></div>' +
+        '</div>' +
+        '<div class="k-moa-side"><div class="k-moa-sk-line k-moa-sk" style="width:4.5rem;height:1.375rem;border-radius:999px;"></div></div>' +
+      '</div>';
+    }
+    function renderSkeleton(){
+      var stats = document.getElementById('k-moa-stats');
+      if (stats){ stats.innerHTML = ''; for (var i=0;i<4;i++) stats.innerHTML += '<div class="k-moa-stat k-moa-sk"></div>'; }
+      var list = document.getElementById('k-moa-list');
+      if (list){ list.innerHTML = ''; for (var j=0;j<3;j++) list.innerHTML += skCard(); }
+    }
+
+    // Filter + sort the in-memory rows and paint the list. No re-fetch.
+    function applyView(){
       var list = document.getElementById('k-moa-list'); if (!list) return;
-      if (!rows || !rows.length) {
-        list.innerHTML =
-          '<div style="text-align:center;padding:3.25rem 1rem;color:var(--tm,#4a5a4a);">' +
-          '  <div style="font-size:2.625rem;margin-bottom:.625rem;color:var(--gl,#9bbf9b);"><i class="fa-regular fa-file-lines"></i></div>' +
-          '  <h3 style="margin:0 0 .25rem;color:var(--td,#1a2a1a);">No agreements yet</h3>' +
-          '  <p style="margin:0;">When ProList sends a Memorandum of Agreement for one of your listings, it will appear here for your signature.</p>' +
-          '</div>';
+      var rows = moaAllRows.slice();
+      if (moaFilter !== 'all') rows = rows.filter(function(a){ return a.status === moaFilter; });
+      if (moaSearch){
+        rows = rows.filter(function(a){
+          var l = a.listings || {};
+          return ((l.title || '') + ' ' + locOf(l)).toLowerCase().indexOf(moaSearch) !== -1;
+        });
+      }
+      rows.sort(function(a, b){
+        if (moaSort === 'oldest') return dt(a.created_at) - dt(b.created_at);
+        if (moaSort === 'recentlySigned') return dt(b.broker_signed_at) - dt(a.broker_signed_at);
+        return dt(b.created_at) - dt(a.created_at); // newest
+      });
+      if (!rows.length){
+        list.innerHTML = emptyHtml('fa-solid fa-magnifying-glass', 'No matching agreements', 'Try a different search term or filter.');
         return;
       }
       list.innerHTML = '';
-      rows.forEach(function(ag){
-        var title = (ag.listings && ag.listings.title) || 'Listing';
-        var st = ag.status;
-        var color = st === 'signed' ? '#16a34a' : st === 'declined' ? '#dc2626' : st === 'sent' ? '#d97706' : '#94a3b8';
-        var label = st === 'signed' ? 'Signed ' + fmtD(ag.broker_signed_at)
-                  : st === 'declined' ? 'Declined'
-                  : st === 'sent' ? 'Action required — awaiting your signature'
-                  : 'Pending';
-        var card = document.createElement('div'); card.className = 'k-moa-card';
-        var main = document.createElement('div'); main.className = 'k-moa-main';
-        main.innerHTML = '<h4>' + escapeHtml(title) + '</h4>' +
-          '<span class="k-moa-badge" style="color:' + color + ';"><span class="k-moa-dot" style="background:' + color + ';"></span>' + escapeHtml(label) + '</span>';
-        card.appendChild(main);
-        if (st === 'sent') {
-          var b = document.createElement('button'); b.className = 'k-btn k-btn-primary';
-          b.innerHTML = '<i class="fa-solid fa-file-signature"></i> Review &amp; Sign';
-          b.addEventListener('click', function(){ openReview(ag); });
-          card.appendChild(b);
-        } else if (st === 'signed') {
-          var v = document.createElement('button'); v.className = 'k-btn k-btn-ghost';
-          v.innerHTML = '<i class="fa-regular fa-file-lines"></i> View';
-          v.addEventListener('click', function(){ openSigned(ag); });
-          card.appendChild(v);
-        }
-        list.appendChild(card);
-      });
+      rows.forEach(function(ag){ list.appendChild(buildCard(ag)); });
     }
-
-    function escapeHtml(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 
     window.__konekLoadMoa = async function(){
       var list = document.getElementById('k-moa-list'); if (!list) return;
       if (!window.sb || !(window.__currentUser && window.__currentUser.id)) return;
       var uid = window.__currentUser.id;
+      moaLoading = true; setChrome('loading'); renderSkeleton();
       var r = await window.sb.from('moa_agreements')
-        .select('id,status,pdf_path,signed_pdf_path,sent_at,broker_signed_at,listing_id,listings(title)')
+        .select('id,status,pdf_path,signed_pdf_path,sent_at,broker_signed_at,created_at,listing_id,listings(title,region,province,city,barangay,images)')
         .eq('broker_id', uid)
         .order('created_at', { ascending: false });
-      if (r.error) { console.warn('[k-moa] load failed:', r.error.message); return; }
-      renderList(r.data || []);
+      moaLoading = false;
+      if (r.error) {
+        console.warn('[k-moa] load failed:', r.error.message);
+        moaAllRows = []; setChrome('empty');
+        list.innerHTML = emptyHtml('fa-regular fa-file-lines', 'No agreements yet', 'When ProList sends a Memorandum of Agreement for one of your listings, it will appear here for your signature.');
+        return;
+      }
+      moaAllRows = r.data || [];
+      if (!moaAllRows.length){
+        setChrome('empty');
+        list.innerHTML = emptyHtml('fa-regular fa-file-lines', 'No agreements yet', 'When ProList sends a Memorandum of Agreement for one of your listings, it will appear here for your signature.');
+        return;
+      }
+      setChrome('data'); renderStats(); applyView();
     };
 
     function showMoaPage(){

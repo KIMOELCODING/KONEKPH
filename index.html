@@ -4990,7 +4990,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     function statusPill(status){
       var label = status==='active' ? 'Active'
                 : status==='pending' ? 'Pending'
-                : status==='archive' ? 'Archived'
+                : status==='archive' ? 'Inactive'
                 : 'Rejected';
       var bg    = status==='active' ? '#1f8a4c'
                 : status==='pending' ? '#c98512'
@@ -5040,6 +5040,18 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (opts.showYLActions){
         var actions = document.createElement('div');
         actions.style.cssText = 'position:absolute;top:.625rem;right:.5rem;display:flex;gap:.375rem;';
+        // Status action: Mark-as-Inactive on active, Restore on inactive (archive).
+        // Pending/rejected get no status action (Edit/Delete only). These call the
+        // set_listing_status RPC via ylConfirm → ylSetStatus.
+        if (p.status === 'active'){
+          var inactBtn = iconBtn('fa-solid fa-box-archive', '#b26a00', 'Mark as Inactive');
+          inactBtn.addEventListener('click', function(ev){ ev.stopPropagation(); askMarkInactive(p.id); });
+          actions.appendChild(inactBtn);
+        } else if (p.status === 'archive'){
+          var restBtn = iconBtn('fa-solid fa-rotate-left', '#1f8a4c', 'Restore to Active');
+          restBtn.addEventListener('click', function(ev){ ev.stopPropagation(); askRestore(p.id); });
+          actions.appendChild(restBtn);
+        }
         var editBtn = iconBtn('fa-solid fa-pen', 'var(--gd)', 'Edit');
         editBtn.addEventListener('click', function(ev){ ev.stopPropagation(); openEdit(p.id); });
         var delBtn = iconBtn('fa-solid fa-trash', '#c83e3e', 'Delete');
@@ -5050,7 +5062,15 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (opts.showStatus && p.status) imgWrap.appendChild(statusPill(p.status));
       card.appendChild(imgWrap);
 
+      // Muted appearance for inactive listings on Your Listings only (reads as
+      // hidden, not deleted). Gated behind showYLActions so the public feed and
+      // bookmarks are never dimmed; action buttons stay crisp (not inside dim).
+      if (opts.showYLActions && p.status === 'archive'){
+        img.style.opacity = '.55';
+      }
+
       var body = document.createElement('div'); body.className = 'pc-body';
+      if (opts.showYLActions && p.status === 'archive') body.style.opacity = '.7';
       var t  = document.createElement('div'); t.className  = 'pc-t';     t.textContent  = p.name  || 'Untitled';
       var lc = document.createElement('div'); lc.className = 'pc-l';     lc.textContent = window.__plCityRegion ? window.__plCityRegion(p) : (p.loc || '');
       var sp = document.createElement('div'); sp.className = 'pc-specs'; sp.textContent = p.specs || '';
@@ -5203,7 +5223,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         else if (p.status === 'active') counts.active++;
         else if (p.status === 'archive') counts.archive++;
       });
-      var LABEL = { all: 'All', pending: 'Pending', active: 'Active', archive: 'Archived' };
+      var LABEL = { all: 'All', pending: 'Pending', active: 'Active', archive: 'Inactive' };
       chips.forEach(function(chip){
         var m = (chip.getAttribute('onclick') || '').match(/setYourListingFilter\('([a-z]+)'/i);
         var token = m ? m[1] : null;
@@ -6095,6 +6115,93 @@ document.addEventListener('DOMContentLoaded', async function() {
           return;
         }
         if (window.__konekLoadData) window.__konekLoadData({force:true});
+      });
+    }
+
+    // ---------- Your Listings: Mark-as-Inactive / Restore (status flow) --------
+    // Reuses the styled overlay/modal pattern (like overlay-unsave-confirm) via one
+    // reusable confirm dialog. Status writes go through the set_listing_status RPC
+    // (migration 0037) — the ONLY path that avoids the reset_listing_on_edit
+    // pending-reset. Storage value is 'archive' (displayed as "Inactive").
+    var ylConfirmCb = null;
+    function ensureYlConfirm(){
+      var ov = document.getElementById('overlay-yl-confirm');
+      if (ov) return ov;
+      ov = document.createElement('div');
+      ov.className = 'overlay';
+      ov.id = 'overlay-yl-confirm';
+      ov.innerHTML =
+        '<div class="modal modal-sm">' +
+        '  <button class="close-modal" id="yl-confirm-x"><i class="fa-solid fa-xmark"></i></button>' +
+        '  <h3 id="yl-confirm-title" style="margin-bottom:.5rem;"></h3>' +
+        '  <p id="yl-confirm-body"></p>' +
+        '  <div class="modal-actions">' +
+        '    <button class="btn btn-secondary" id="yl-confirm-cancel">Cancel</button>' +
+        '    <button class="btn btn-primary" id="yl-confirm-ok">Confirm</button>' +
+        '  </div>' +
+        '</div>';
+      document.body.appendChild(ov);
+      var closeIt = function(){ if (window.closeModal) window.closeModal('overlay-yl-confirm'); else ov.classList.remove('show'); };
+      ov.querySelector('#yl-confirm-x').addEventListener('click', function(){ ylConfirmCb = null; closeIt(); });
+      ov.querySelector('#yl-confirm-cancel').addEventListener('click', function(){ ylConfirmCb = null; closeIt(); });
+      var okBtn = ov.querySelector('#yl-confirm-ok');
+      okBtn.addEventListener('click', function(){
+        if (!ylConfirmCb || okBtn.disabled) return;   // double-fire guard
+        var cb = ylConfirmCb;
+        var cancelBtn = ov.querySelector('#yl-confirm-cancel');
+        okBtn.disabled = true; if (cancelBtn) cancelBtn.disabled = true;
+        Promise.resolve(cb()).then(function(ok){
+          okBtn.disabled = false; if (cancelBtn) cancelBtn.disabled = false;
+          if (ok){ ylConfirmCb = null; closeIt(); }   // failure keeps the modal open
+        }, function(){ okBtn.disabled = false; if (cancelBtn) cancelBtn.disabled = false; });
+      });
+      return ov;
+    }
+    function ylConfirm(opts){
+      var ov = ensureYlConfirm();
+      ov.querySelector('#yl-confirm-title').textContent = opts.title || 'Are you sure?';
+      ov.querySelector('#yl-confirm-body').textContent = opts.body || '';
+      var okBtn = ov.querySelector('#yl-confirm-ok');
+      okBtn.textContent = opts.okLabel || 'Confirm';
+      okBtn.disabled = false;
+      var cancelBtn = ov.querySelector('#yl-confirm-cancel'); if (cancelBtn) cancelBtn.disabled = false;
+      ylConfirmCb = opts.onOk || null;
+      if (window.showModal) window.showModal('overlay-yl-confirm'); else ov.classList.add('show');
+    }
+    // Call the RPC, then patch the in-memory YOUR_LISTINGS (+ _RAW) row so the card
+    // moves tabs without a refetch (mirrors confirmDelete's optimistic update).
+    // Returns a promise<bool> — true closes the modal, false leaves it open.
+    function ylSetStatus(id, toStatus, successMsg){
+      return Promise.resolve(window.sb.rpc('set_listing_status', { p_listing_id: id, p_status: toStatus }))
+        .then(function(res){
+          if (res && res.error){
+            if (window.__konekToast) window.__konekToast('Could not update listing: ' + res.error.message, true);
+            return false;
+          }
+          var patch = function(arr){ if (!arr) return; for (var i=0;i<arr.length;i++){ if (arr[i].id === id){ arr[i].status = toStatus; break; } } };
+          patch(window.YOUR_LISTINGS); patch(window.YOUR_LISTINGS_RAW);
+          renderYourListings();  // re-filters + syncs counts → card moves tabs
+          if (window.__konekToast) window.__konekToast(successMsg);
+          return true;
+        }, function(err){
+          if (window.__konekToast) window.__konekToast('Could not update listing: ' + ((err && err.message) || 'error'), true);
+          return false;
+        });
+    }
+    function askMarkInactive(id){
+      ylConfirm({
+        title: 'Mark listing as inactive?',
+        body: 'This listing will no longer appear in search results or your public profile. You can restore it at any time.',
+        okLabel: 'Mark as Inactive',
+        onOk: function(){ return ylSetStatus(id, 'archive', 'Listing marked inactive.'); }
+      });
+    }
+    function askRestore(id){
+      ylConfirm({
+        title: 'Restore listing?',
+        body: 'This listing will appear again in search and on your public profile.',
+        okLabel: 'Restore',
+        onOk: function(){ return ylSetStatus(id, 'active', 'Listing restored.'); }
       });
     }
 

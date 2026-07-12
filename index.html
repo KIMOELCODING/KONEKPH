@@ -1140,7 +1140,8 @@ document.addEventListener('DOMContentLoaded', async function() {
         created_at: row.created_at,
         bedrooms: row.bedrooms,
         bathrooms: row.bathrooms,
-        floor_area_sqm: row.floor_area_sqm
+        floor_area_sqm: row.floor_area_sqm,
+        lot_area_sqm: row.lot_area_sqm
       };
     }
     // Exposed so k-listings (a separate IIFE) can map paginated rows to the
@@ -1281,7 +1282,14 @@ document.addEventListener('DOMContentLoaded', async function() {
           if (!trend.__skip)  window.TRENDING_ARTICLES = (trend.data  || []).map(mapArticle);
 
           if (!deals.__skip) window.DEALS = deals.data || [];
-          if (!saved.__skip) window.SAVED_IDS = new Set((saved.data || []).map(function(r){ return r.listing_id; }));
+          if (!saved.__skip) {
+            window.SAVED_IDS = new Set((saved.data || []).map(function(r){ return r.listing_id; }));
+            // Keep the date-saved (saved_listings.created_at) keyed by listing_id
+            // so Saved Listings cards can show "Saved <date>" (distinct from the
+            // listing's own created_at). Previously fetched then discarded.
+            var sat = {}; (saved.data || []).forEach(function(r){ sat[r.listing_id] = r.created_at; });
+            window.SAVED_AT = sat;
+          }
 
           // Engagement Analytics time-series for the top-5 of the broker's OWN
           // listings (by view_count): saves, visits (distinct viewers/period),
@@ -5077,7 +5085,27 @@ document.addEventListener('DOMContentLoaded', async function() {
       var foot = document.createElement('div'); foot.className = 'pc-foot';
       var pr = document.createElement('div'); pr.className = 'pc-price'; pr.textContent = p.price || '';
       foot.appendChild(pr);
-      body.appendChild(t); body.appendChild(lc); body.appendChild(sp); body.appendChild(foot);
+      body.appendChild(t); body.appendChild(lc); body.appendChild(sp);
+      // Saved-page-only enrichments (gated behind isBookmarkPage so the public
+      // feed and Your Listings cards are unchanged): broker name + "Saved <date>"
+      // meta line, and a View Listing action in the footer.
+      if (opts.isBookmarkPage){
+        var meta = document.createElement('div'); meta.className = 'sl-card-meta';
+        var brk = document.createElement('span'); brk.className = 'sl-card-broker';
+        brk.innerHTML = '<i class="fa-solid fa-user"></i> ';
+        brk.appendChild(document.createTextNode(p.broker_name || 'ProList Broker'));
+        var svd = document.createElement('span'); svd.className = 'sl-card-saved';
+        svd.innerHTML = '<i class="fa-regular fa-bookmark"></i> ';
+        svd.appendChild(document.createTextNode('Saved ' + fmtSavedDate(p.saved_at)));
+        meta.appendChild(brk); meta.appendChild(svd);
+        body.appendChild(meta);
+        var viewBtn = document.createElement('button');
+        viewBtn.type = 'button'; viewBtn.className = 'sl-view-btn';
+        viewBtn.textContent = 'View Listing';
+        viewBtn.addEventListener('click', function(ev){ ev.stopPropagation(); openDetail(p.id); });
+        foot.appendChild(viewBtn);
+      }
+      body.appendChild(foot);
       card.appendChild(body);
       return card;
     }
@@ -5244,28 +5272,199 @@ document.addEventListener('DOMContentLoaded', async function() {
       grid.innerHTML = '';
       data.forEach(function(p){ grid.appendChild(buildCard(p, { showStatus:true, showYLActions:true })); });
     }
+    // ---- Saved Listings dashboard helpers -----------------------------------
+    var bmSearch = '', bmFilter = 'all', bmSort = 'recentlySaved';
+    function bmDate(s){ var t = s ? Date.parse(s) : NaN; return isNaN(t) ? 0 : t; }
+    function bmPriceNum(p){ return Number(String(p.price || '').replace(/[^0-9.]/g, '')) || 0; }
+    function fmtSavedDate(iso){
+      if (!iso) return 'recently';
+      var d = new Date(iso); if (isNaN(d.getTime())) return 'recently';
+      try { return d.toLocaleDateString('en-PH', { month:'short', day:'numeric', year:'numeric' }); } catch(e){ return 'recently'; }
+    }
+    function bmCategoryBucket(p){
+      var s = ((p.category || '') + ' ' + (p.property_type || '')).toLowerCase();
+      if (/condo/.test(s)) return 'condo';
+      if (/lot|land/.test(s)) return 'lot';
+      if (/commercial|office|retail|warehouse|industrial/.test(s)) return 'commercial';
+      if (/house|townhouse|duplex|residential|apartment|villa|bungalow/.test(s)) return 'house';
+      return 'other';
+    }
+    function bmStatCard(icon, n, label, desc, color, off){
+      return '<div class="sl-stat' + (off ? ' sl-stat-off' : '') + '"' + (off ? ' aria-disabled="true"' : '') + '>' +
+        '<div class="sl-stat-top"><span class="sl-stat-ic" style="color:' + color + ';"><i class="fa-solid ' + icon + '"></i></span>' +
+        '<span class="sl-stat-n">' + n + '</span></div>' +
+        '<div class="sl-stat-l">' + label + '</div><div class="sl-stat-d">' + desc + '</div></div>';
+    }
+    function renderBookmarksStats(all){
+      var el = document.getElementById('sl-stats'); if (!el) return;
+      var total = all.length;
+      var now = Date.now(), wk = 7 * 24 * 3600 * 1000;
+      var recent = all.filter(function(p){ var t = bmDate(p.saved_at); return t && (now - t) <= wk; }).length;
+      el.innerHTML =
+        bmStatCard('fa-bookmark',  total,  'Saved Listings', 'Total in your list',   'var(--gd,#2a7a3d)', false) +
+        bmStatCard('fa-clock',     recent, 'Recently Added', 'Saved in last 7 days', '#2a7a3d', false) +
+        bmStatCard('fa-arrow-down','—',    'Price Reduced',  'Coming soon',          '#94a3b8', true) +
+        bmStatCard('fa-bell',      '—',    'New Updates',    'Coming soon',          '#94a3b8', true);
+    }
+    function bmSkeleton(){
+      var one = '<div class="sl-sk-card"><div class="sl-sk-img sl-sk"></div><div class="sl-sk-body">' +
+        '<div class="sl-sk-line sl-sk" style="width:70%;height:.9rem;"></div>' +
+        '<div class="sl-sk-line sl-sk" style="width:45%;"></div>' +
+        '<div class="sl-sk-line sl-sk" style="width:35%;"></div></div></div>';
+      return one + one + one + one + one + one;
+    }
+    function injectBookmarksCss(){
+      if (document.getElementById('sl-dash-css')) return;
+      var s = document.createElement('style'); s.id = 'sl-dash-css';
+      s.textContent = [
+        '#page-bookmarks #sl-chrome,#page-bookmarks #bookmarks-grid,#page-bookmarks #bookmarks-empty{max-width:1200px;margin-left:auto;margin-right:auto;}',
+        '.sl-stats{display:flex;flex-wrap:wrap;gap:1rem;margin:0 0 1.25rem;}',
+        '.sl-stat{flex:1 1 180px;min-height:92px;background:rgba(255,255,255,.7);border:1px solid rgba(255,255,255,.85);border-radius:16px;padding:.875rem 1rem;box-shadow:0 4px 16px rgba(0,0,0,.05);transition:transform .18s ease,box-shadow .18s ease;}',
+        '.sl-stat:not(.sl-stat-off):hover{transform:translateY(-4px);box-shadow:0 12px 28px rgba(0,0,0,.1);}',
+        '.sl-stat-off{opacity:.6;filter:grayscale(.3);}',
+        '.sl-stat-top{display:flex;align-items:center;gap:.5rem;margin-bottom:.375rem;}',
+        '.sl-stat-ic{font-size:1rem;}',
+        '.sl-stat-n{font-size:1.5rem;font-weight:800;line-height:1;color:var(--td,#1a2a1a);font-variant-numeric:tabular-nums;}',
+        '.sl-stat-off .sl-stat-n{color:#94a3b8;}',
+        '.sl-stat-l{font-size:.8125rem;font-weight:700;color:var(--td,#1a2a1a);}',
+        '.sl-stat-d{font-size:.6875rem;color:var(--tl);margin-top:.125rem;}',
+        '.sl-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:.75rem;margin-bottom:1.25rem;}',
+        '.sl-search{flex:1 1 240px;display:flex;align-items:center;gap:.5rem;background:#fff;border:1px solid var(--br,#d4dcd4);border-radius:10px;padding:.5rem .75rem;min-width:0;}',
+        '.sl-search i{color:var(--tl);font-size:.8125rem;}',
+        '.sl-search input{border:0;outline:0;background:transparent;font:inherit;font-size:.8125rem;flex:1;min-width:0;color:var(--td,#1a2a1a);}',
+        '.sl-chips{display:inline-flex;flex-wrap:wrap;gap:.375rem;}',
+        '.sl-chip{border:1px solid var(--br,#d4dcd4);background:rgba(255,255,255,.6);color:var(--tm,#4a5a4a);border-radius:999px;padding:.4375rem .875rem;font:inherit;font-size:.75rem;font-weight:600;cursor:pointer;transition:all .15s ease;white-space:nowrap;}',
+        '.sl-chip:hover{border-color:var(--gd,#2a7a3d);color:var(--gd,#2a7a3d);}',
+        '.sl-chip.on{background:var(--gd,#2a7a3d);border-color:var(--gd,#2a7a3d);color:#fff;}',
+        '.sl-sort{border:1px solid var(--br,#d4dcd4);background:#fff;border-radius:10px;padding:.5rem .75rem;font:inherit;font-size:.8125rem;color:var(--td,#1a2a1a);cursor:pointer;}',
+        '.sl-card-meta{display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin:.25rem 0 .125rem;font-size:.6875rem;color:var(--tl);}',
+        '.sl-card-broker{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}',
+        '.sl-card-saved{white-space:nowrap;flex-shrink:0;}',
+        '.sl-card-meta i{opacity:.7;}',
+        '.sl-view-btn{border:1px solid var(--gd,#2a7a3d);background:rgba(46,122,70,.08);color:var(--gd,#2a7a3d);border-radius:8px;padding:.375rem .75rem;font:inherit;font-size:.75rem;font-weight:700;cursor:pointer;white-space:nowrap;transition:background .15s ease,color .15s ease;}',
+        '.sl-view-btn:hover{background:var(--gd,#2a7a3d);color:#fff;}',
+        '.sl-sk-card{border-radius:14px;overflow:hidden;background:rgba(255,255,255,.6);border:1px solid rgba(255,255,255,.8);}',
+        '.sl-sk-img{height:150px;}',
+        '.sl-sk-body{padding:.75rem;display:flex;flex-direction:column;gap:.5rem;}',
+        '.sl-sk-line{height:.7rem;border-radius:6px;background:rgba(46,122,70,.1);}',
+        '.sl-sk{position:relative;overflow:hidden;background:rgba(46,122,70,.08);}',
+        '.sl-sk::after{content:"";position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,rgba(255,255,255,.6),transparent);animation:slshimmer 1.3s infinite;}',
+        '@keyframes slshimmer{100%{transform:translateX(100%)}}',
+        '.sl-nomatch{grid-column:1/-1;text-align:center;padding:2.5rem 1rem;color:var(--tm,#4a5a4a);font-size:.8125rem;}',
+        '.sl-browse-btn{margin-top:1rem;border:none;border-radius:10px;background:var(--gd,#2a7a3d);color:#fff;padding:.625rem 1.25rem;font:inherit;font-size:.8125rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:.5rem;}',
+        '@media (max-width:640px){.sl-stat{flex:1 1 140px;}}'
+      ].join('');
+      document.head.appendChild(s);
+    }
+
+    // Inject the Saved dashboard chrome (stats + search/filter/sort) once, above
+    // the grid. Scoped to #page-bookmarks; never affects feed/YL.
+    function ensureBookmarksChrome(){
+      var grid = document.getElementById('bookmarks-grid');
+      if (!grid || !grid.parentNode) return;
+      injectBookmarksCss();
+      if (!document.getElementById('sl-chrome')){
+        var chrome = document.createElement('div');
+        chrome.id = 'sl-chrome';
+        chrome.innerHTML =
+          '<div id="sl-stats" class="sl-stats"></div>' +
+          '<div class="sl-toolbar">' +
+            '<div class="sl-search"><i class="fa-solid fa-magnifying-glass"></i><input id="sl-q" type="text" placeholder="Search saved properties…" autocomplete="off" aria-label="Search saved properties"></div>' +
+            '<div class="sl-chips" id="sl-chips">' +
+              '<button type="button" class="sl-chip on" data-f="all">All</button>' +
+              '<button type="button" class="sl-chip" data-f="house">House</button>' +
+              '<button type="button" class="sl-chip" data-f="condo">Condo</button>' +
+              '<button type="button" class="sl-chip" data-f="lot">Lot</button>' +
+              '<button type="button" class="sl-chip" data-f="commercial">Commercial</button>' +
+            '</div>' +
+            '<select id="sl-sort" class="sl-sort" aria-label="Sort saved properties">' +
+              '<option value="recentlySaved">Recently Saved</option>' +
+              '<option value="newestListing">Newest Listing</option>' +
+              '<option value="oldestListing">Oldest Listing</option>' +
+              '<option value="lowPrice">Lowest Price</option>' +
+              '<option value="highPrice">Highest Price</option>' +
+            '</select>' +
+          '</div>';
+        grid.parentNode.insertBefore(chrome, grid);
+        var q = chrome.querySelector('#sl-q');
+        if (q) q.addEventListener('input', function(){ bmSearch = (q.value || '').trim().toLowerCase(); renderBookmarks(); });
+        var chips = chrome.querySelector('#sl-chips');
+        if (chips) chips.addEventListener('click', function(e){
+          var b = e.target.closest('.sl-chip'); if (!b) return;
+          bmFilter = b.getAttribute('data-f') || 'all';
+          chips.querySelectorAll('.sl-chip').forEach(function(c){ c.classList.toggle('on', c === b); });
+          renderBookmarks();
+        });
+        var sortSel = chrome.querySelector('#sl-sort');
+        if (sortSel) sortSel.addEventListener('change', function(){ bmSort = sortSel.value; renderBookmarks(); });
+      }
+      // Add a Browse-Listings CTA to the (template) empty state once.
+      var emptyEl = document.getElementById('bookmarks-empty');
+      if (emptyEl && !document.getElementById('sl-browse-btn')){
+        var cta = document.createElement('button');
+        cta.id = 'sl-browse-btn'; cta.type = 'button'; cta.className = 'sl-browse-btn';
+        cta.innerHTML = '<i class="fa-solid fa-magnifying-glass"></i> Browse Listings';
+        cta.addEventListener('click', function(){ if (window.goTo) window.goTo('listings'); });
+        emptyEl.appendChild(cta);
+      }
+    }
+
     function renderBookmarks(){
       var grid = document.getElementById('bookmarks-grid');
       var empty = document.getElementById('bookmarks-empty');
       if (!grid) return;
+      ensureBookmarksChrome();
       var ids = window.SAVED_IDS || new Set();
-      // Union the fetched full saved set (any status/age) with the active feed
-      // (covers a brand-new save not yet in the fetched cache), deduped + filtered to
-      // the current SAVED_IDS. Filtering LISTINGS_DATA alone dropped saved listings
-      // outside the 50-most-recent-active window (archived/sold/older/own listings).
+      // Reconciled full set: fetched saves (any status/age) unioned with the active
+      // feed (covers a brand-new save not yet in the fetched cache), keyed to
+      // current SAVED_IDS.
       var byId = {};
       (window.BOOKMARKS_DATA || []).forEach(function(p){ if (ids.has(p.id)) byId[p.id] = p; });
       (window.LISTINGS_DATA  || []).forEach(function(p){ if (ids.has(p.id) && !byId[p.id]) byId[p.id] = p; });
-      var data = Object.keys(byId).map(function(k){ return byId[k]; });
-      // Any saved id not covered by what's loaded → fetch the full set (self-heals).
+      var all = Object.keys(byId).map(function(k){ return byId[k]; });
+
+      // Self-heal, loop-safe: only (re)fetch when the CURRENT id-set hasn't already
+      // been attempted. Prune (in loadBookmarks) removes unreadable ids so haveAll
+      // resolves; the __lastAttempt signature stops re-entry for the same set even
+      // on a fetch error (where we intentionally don't prune).
       var haveAll = true;
       ids.forEach(function(id){ if (!byId[id]) haveAll = false; });
-      if (!haveAll && !renderBookmarks.__loading) { loadBookmarks(); }
-      if (!data.length){ grid.innerHTML=''; if (empty) empty.style.display='block'; return; }
-      if (empty) empty.style.display='none';
+      var sig = Array.from(ids).sort().join(',');
+      if (!haveAll && !renderBookmarks.__loading && renderBookmarks.__lastAttempt !== sig){ loadBookmarks(); }
+
+      // Loading skeleton (first load, nothing to show yet).
+      if (renderBookmarks.__loading && !all.length){
+        if (empty) empty.style.display = 'none';
+        renderBookmarksStats([]);
+        grid.className = 'pg-grid';
+        grid.innerHTML = bmSkeleton();
+        return;
+      }
+
+      renderBookmarksStats(all);
+
+      if (!all.length){ grid.innerHTML = ''; if (empty) empty.style.display = 'block'; return; }
+      if (empty) empty.style.display = 'none';
+
+      // Filter → search → sort (client-side; no re-fetch).
+      var view = all.slice();
+      if (bmFilter !== 'all') view = view.filter(function(p){ return bmCategoryBucket(p) === bmFilter; });
+      if (bmSearch) view = view.filter(function(p){ return (((p.name || '') + ' ' + (p.loc || '')).toLowerCase().indexOf(bmSearch) !== -1); });
+      view.sort(function(a, b){
+        if (bmSort === 'newestListing') return bmDate(b.created_at) - bmDate(a.created_at);
+        if (bmSort === 'oldestListing') return bmDate(a.created_at) - bmDate(b.created_at);
+        if (bmSort === 'lowPrice')      return bmPriceNum(a) - bmPriceNum(b);
+        if (bmSort === 'highPrice')     return bmPriceNum(b) - bmPriceNum(a);
+        return bmDate(b.saved_at) - bmDate(a.saved_at); // recentlySaved (default)
+      });
+
       grid.className = savedView === 'tile' ? 'pg-grid' : 'pg-list';
       grid.innerHTML = '';
-      data.forEach(function(p){ grid.appendChild(buildCard(p, { showSave:true, isBookmarkPage:true })); });
+      if (!view.length){
+        grid.innerHTML = '<div class="sl-nomatch">No saved properties match your search or filter.</div>';
+        return;
+      }
+      view.forEach(function(p){ grid.appendChild(buildCard(p, { showSave:true, isBookmarkPage:true })); });
     }
 
     // Fetch every saved listing by id (any status/age) so Bookmarks isn't limited to
@@ -5273,17 +5472,59 @@ document.addEventListener('DOMContentLoaded', async function() {
     // same card shape buildCard expects.
     async function loadBookmarks(){
       var ids = Array.from(window.SAVED_IDS || []);
-      if (!ids.length){ window.BOOKMARKS_DATA = []; renderBookmarks(); return; }
+      if (!ids.length){ window.BOOKMARKS_DATA = []; renderBookmarks.__lastAttempt = ''; renderBookmarks(); return; }
       if (renderBookmarks.__loading) return;
       renderBookmarks.__loading = true;
+      renderBookmarks();  // paint the skeleton while the fetch is in flight
+      var sig = ids.slice().sort().join(',');
+      var uid = window.__currentUser && window.__currentUser.id;
       try {
         var res = await window.sb.from('listings').select(window.LIST_COLS || '*').in('id', ids);
-        if (res.error) throw res.error;
-        window.BOOKMARKS_DATA = (res.data || []).map(function(row){
-          return (typeof window.mapListing === 'function') ? window.mapListing(row) : row;
+        if (res.error) throw res.error;   // ERROR path below: NO prune, NO SAVED_IDS mutation
+        var rows = res.data || [];
+
+        // --- Reconcile + prune (ONLY on a proven-successful fetch) -----------
+        // Ids we requested but that did NOT come back are unreadable (archived by
+        // their owner, or gone). Removing them from SAVED_IDS lets renderBookmarks'
+        // haveAll resolve → breaks the re-fetch loop; the DELETE clears the stale
+        // saved_listings row (silent auto-removal). Never runs on a fetch error.
+        var returned = {}; rows.forEach(function(r){ returned[r.id] = 1; });
+        var stale = ids.filter(function(id){ return !returned[id]; });
+        if (stale.length){
+          stale.forEach(function(id){ if (window.SAVED_IDS) window.SAVED_IDS.delete(id); });
+          if (uid){
+            window.sb.from('saved_listings').delete().eq('user_id', uid).in('listing_id', stale)
+              .then(function(r){ if (r && r.error) console.warn('[k-listings] prune stale saves', r.error); });
+          }
+        }
+
+        // --- Enrich: broker name (broker_directory) + date-saved -------------
+        var brokerIds = [];
+        rows.forEach(function(r){ if (r.broker_id && brokerIds.indexOf(r.broker_id) === -1) brokerIds.push(r.broker_id); });
+        var brokerById = {};
+        if (brokerIds.length){
+          var bd = await window.sb.from('broker_directory').select('id, first_name, last_name').in('id', brokerIds);
+          if (bd && !bd.error) (bd.data || []).forEach(function(b){
+            brokerById[b.id] = (((b.first_name || '') + ' ' + (b.last_name || '')).trim()) || 'ProList Broker';
+          });
+        }
+        var sat = window.SAVED_AT || {};
+        window.BOOKMARKS_DATA = rows.map(function(row){
+          var card = (typeof window.mapListing === 'function') ? window.mapListing(row) : row;
+          card.broker_name = brokerById[row.broker_id] || 'ProList Broker';
+          card.saved_at = sat[row.id] || null;
+          return card;
         });
-      } catch(e){ console.warn('[k-listings] loadBookmarks', e); }
-      finally { renderBookmarks.__loading = false; }
+      } catch(e){
+        console.warn('[k-listings] loadBookmarks', e);
+        // ERROR: do NOT prune, do NOT touch SAVED_IDS — a transient failure must
+        // never delete a save.
+      } finally {
+        // Record the attempted id-set (success OR error) so renderBookmarks won't
+        // re-enter loadBookmarks for the same unresolved set (loop-safety net).
+        renderBookmarks.__lastAttempt = sig;
+        renderBookmarks.__loading = false;
+      }
       renderBookmarks();
     }
     window.loadBookmarks = loadBookmarks;

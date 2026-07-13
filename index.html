@@ -8631,6 +8631,15 @@ document.addEventListener('DOMContentLoaded', async function() {
           '.kmsg-ctx-confirm-row{display:flex;gap:.5rem;}' +
           '.kmsg-ctx-btn{flex:1;padding:.4375rem;border-radius:8px;border:1px solid rgba(210,224,215,.7);background:#fff;font:inherit;font-size:.75rem;font-weight:600;cursor:pointer;color:var(--tm);}' +
           '.kmsg-ctx-btn.danger{background:#d94f4f;border-color:#d94f4f;color:#fff;}' +
+          // Phase D2 — reaction bar chips + in-popover emoji picker.
+          '.kmsg-react-bar{display:flex;gap:4px;margin-top:3px;flex-wrap:wrap;max-width:940px;}' +
+          '.kmsg-react-chip{display:inline-flex;align-items:center;gap:3px;height:22px;padding:0 7px;border-radius:11px;border:1px solid rgba(210,224,215,.7);background:#fff;font-size:.75rem;line-height:1;cursor:pointer;transition:background .15s ease,border-color .15s ease;}' +
+          '.kmsg-react-chip:hover{background:rgba(234,245,238,.6);}' +
+          '.kmsg-react-chip.mine{border-color:var(--gd);background:rgba(46,122,70,.12);}' +
+          '.kmsg-react-count{font-size:.6875rem;color:var(--tm);font-variant-numeric:tabular-nums;}' +
+          '.kmsg-react-pick{display:flex;gap:2px;padding:.25rem;}' +
+          '.kmsg-react-pick button{width:2rem;height:2rem;border:none;background:transparent;border-radius:8px;font-size:1.125rem;line-height:1;cursor:pointer;transition:transform .12s ease,background .15s ease;}' +
+          '.kmsg-react-pick button:hover{background:rgba(234,245,238,.7);transform:scale(1.15);}' +
         '</style>' +
         '<div id="kmsg-header" style="padding:.875rem 1.125rem;border-bottom:1px solid rgba(210,224,215,.4);background:rgba(255,255,255,.6);display:flex;align-items:center;gap:.625rem;flex-shrink:0;">' +
           '<div id="kmsg-hdr-empty" style="font-size:.8125rem;color:var(--tm);">Select a conversation to start messaging.</div>' +
@@ -8862,8 +8871,98 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
       });
       if (missing.length) await fetchListingsByIds(missing);
+      await loadReactions(rows.map(function(r){ return r.id; }));  // D2 — reactions for this thread
 
       renderMessages(convId);
+    }
+
+    // ─── Reactions (Phase D2) ─────────────────────────────────────
+    // One reaction per user per message. Stored as stable string keys; rendered
+    // to unicode client-side. REACTIONS_BY_MSG[mid] = [{user_id, emoji}].
+    var REACTIONS_BY_MSG = {};
+    var REACT_EMOJI = { like:'👍', love:'❤️', happy:'😄', celebrate:'🎉', sad:'😢' };
+    var REACT_ORDER = ['like', 'love', 'happy', 'celebrate', 'sad'];
+    async function loadReactions(ids){
+      if (!ids || !ids.length || !window.sb) return;
+      var res = await window.sb.from('message_reactions').select('message_id,user_id,emoji').in('message_id', ids);
+      if (res.error){ console.warn('[k-messages] reactions load', res.error); return; }
+      ids.forEach(function(id){ REACTIONS_BY_MSG[id] = []; });
+      (res.data || []).forEach(function(r){
+        (REACTIONS_BY_MSG[r.message_id] = REACTIONS_BY_MSG[r.message_id] || []).push({ user_id: r.user_id, emoji: r.emoji });
+      });
+    }
+    // Add / switch / remove the current user's reaction (optimistic + rollback).
+    async function toggleReaction(mid, emoji){
+      var uid = currentUid(); if (!uid || !mid) return;
+      var arr = REACTIONS_BY_MSG[mid] = REACTIONS_BY_MSG[mid] || [];
+      var before = arr.slice();
+      var mineNow = arr.filter(function(r){ return r.user_id === uid; })[0];
+      var removing = mineNow && mineNow.emoji === emoji;
+      // optimistic: one entry per user (filter-then-push)
+      REACTIONS_BY_MSG[mid] = arr.filter(function(r){ return r.user_id !== uid; });
+      if (!removing) REACTIONS_BY_MSG[mid].push({ user_id: uid, emoji: emoji });
+      if (CURRENT_CONV_ID) renderMessages(CURRENT_CONV_ID);
+      var res = removing
+        ? await window.sb.from('message_reactions').delete().eq('message_id', mid).eq('user_id', uid)
+        : await window.sb.from('message_reactions').upsert({ message_id: mid, user_id: uid, emoji: emoji }, { onConflict: 'message_id,user_id' });
+      if (res && res.error){
+        console.warn('[k-messages] react', res.error);
+        REACTIONS_BY_MSG[mid] = before;               // rollback
+        if (CURRENT_CONV_ID) renderMessages(CURRENT_CONV_ID);
+        if (window.__konekToast) window.__konekToast('Could not update your reaction. Please try again.', true);
+      }
+    }
+    // Live reaction events (INSERT/UPDATE/DELETE). Dedupe by user_id so our own
+    // optimistic reaction is idempotent when its echo arrives (no double count).
+    function onRealtimeReaction(payload){
+      if (!payload) return;
+      var isDel = payload.eventType === 'DELETE';
+      var rec = isDel ? payload.old : payload.new;
+      if (!rec || !rec.message_id) return;
+      var mid = rec.message_id;
+      var arr = (REACTIONS_BY_MSG[mid] || []).filter(function(r){ return r.user_id !== rec.user_id; });
+      if (!isDel) arr.push({ user_id: rec.user_id, emoji: rec.emoji });
+      REACTIONS_BY_MSG[mid] = arr;
+      var rows = MESSAGES_BY_CONV[CURRENT_CONV_ID] || [];
+      if (rows.some(function(r){ return r.id === mid; })) renderMessages(CURRENT_CONV_ID);
+    }
+    // Compact reaction bar below a bubble: emoji + count chips, own reaction
+    // highlighted. Click a chip to toggle. Rendered only for non-deleted messages.
+    function renderReactionBar(wrap, m, mine){
+      var arr = REACTIONS_BY_MSG[m.id] || [];
+      if (!arr.length) return;
+      var uid = currentUid();
+      var counts = {}, myEmoji = null;
+      arr.forEach(function(r){ counts[r.emoji] = (counts[r.emoji] || 0) + 1; if (r.user_id === uid) myEmoji = r.emoji; });
+      var bar = document.createElement('div');
+      bar.className = 'kmsg-react-bar';
+      bar.style.justifyContent = mine ? 'flex-end' : 'flex-start';
+      REACT_ORDER.forEach(function(key){
+        if (!counts[key]) return;
+        var chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'kmsg-react-chip' + (myEmoji === key ? ' mine' : '');
+        var e = document.createElement('span'); e.textContent = REACT_EMOJI[key];
+        var c = document.createElement('span'); c.className = 'kmsg-react-count'; c.textContent = counts[key];
+        chip.appendChild(e); chip.appendChild(c);
+        chip.addEventListener('click', function(ev){ ev.stopPropagation(); toggleReaction(m.id, key); });
+        bar.appendChild(chip);
+      });
+      wrap.appendChild(bar);
+    }
+    // In-popover emoji picker (mirrors the D1 delete-confirm step).
+    function openReactionPicker(row){
+      var el = ensureCtxMenu();
+      el.innerHTML = '';
+      var pick = document.createElement('div'); pick.className = 'kmsg-react-pick';
+      REACT_ORDER.forEach(function(key){
+        var b = document.createElement('button'); b.type = 'button'; b.title = key;
+        b.textContent = REACT_EMOJI[key];
+        b.addEventListener('click', function(){ closeMsgMenu(); toggleReaction(row.id, key); });
+        pick.appendChild(b);
+      });
+      el.appendChild(pick);
+      el.classList.add('show');
     }
 
     // Count messages the current broker has sent in this conversation. Uses the
@@ -9204,6 +9303,10 @@ document.addEventListener('DOMContentLoaded', async function() {
 
       wrap.appendChild(bubble);
 
+      // D2 — reaction bar below the bubble (non-deleted messages only; deleted
+      // messages tombstone-early-return above, so they never reach here).
+      renderReactionBar(wrap, m, mine);
+
       // Delivery status — only on my own last message of a cluster.
       if (mine && opts.lastOfCluster){
         var st = m.__pending     ? 'sending…'
@@ -9378,6 +9481,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       var uid = currentUid();
       return [
         { label:'Reply', icon:'fa-reply', show:true, onClick:function(){ startReply(row); } },
+        { label:'React', icon:'fa-face-smile', show: !row.deleted_at, onClick:function(){ openReactionPicker(row); } },
         { label:'Delete', icon:'fa-trash-can', danger:true,
           show: row.sender_id === uid && !row.deleted_at,
           onClick:function(){ confirmDeleteInMenu(row); } }
@@ -9868,6 +9972,11 @@ document.addEventListener('DOMContentLoaded', async function() {
         .on('postgres_changes',
             { event: 'UPDATE', schema: 'public', table: 'messages' },
             function(payload){ onRealtimeMessageUpdate(payload.new); })
+        // D2 — reactions are a separate table (INSERT/UPDATE/DELETE); reconcile
+        // REACTIONS_BY_MSG and re-render the affected message's bar live.
+        .on('postgres_changes',
+            { event: '*', schema: 'public', table: 'message_reactions' },
+            function(payload){ onRealtimeReaction(payload); })
         .subscribe();
     }
 

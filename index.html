@@ -8178,6 +8178,27 @@ document.addEventListener('DOMContentLoaded', async function() {
     var typingHideTimer = null;   // hide the incoming "typing…" bubble after idle
     var listingTitleCache = {};    // listing_id → {title, price, img}
 
+    // Phase B2 — chat attachments. Single staged attachment per message. Bucket
+    // 'message-attachments' is PRIVATE → reads go through createSignedUrl only
+    // (never getPublicUrl/__plImg). Allow-list matches the B1 bucket exactly.
+    var STAGED = null;             // {file, type:'image'|'file', objectUrl, name, size, mime}
+    var signedUrlCache = {};       // attachment_path → { url, exp(ms) }
+    var pendingRevoke = [];        // failed-bubble objectURLs, revoked on next stage / conv switch
+    var ATTACH_MAX_BYTES = 10 * 1024 * 1024;   // 10 MB (matches bucket file_size_limit)
+    var ATTACH_MIME = {
+      'image/jpeg':1, 'image/png':1, 'image/webp':1, 'application/pdf':1,
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document':1,   // docx
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':1          // xlsx
+    };
+    var ATTACH_EXT = {  // fallback when the browser reports an empty file.type
+      pdf:'application/pdf',
+      docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', webp:'image/webp'
+    };
+    var SIGN_TTL = 3600;                 // signed URL valid 1h
+    var SIGN_CACHE_MS = 55 * 60 * 1000;  // cache < sign TTL so a served URL never expires mid-view
+
     // Quick-reply chips (Phase 1). Broker-to-broker copy: one licensed broker
     // messaging another about their listing. Click populates the composer only.
     var QUICK_REPLIES = [
@@ -8311,6 +8332,50 @@ document.addEventListener('DOMContentLoaded', async function() {
           img: img
         };
       });
+    }
+
+    // ─── Attachment helpers (Phase B2) ────────────────────────────
+    function fmtBytes(n){
+      n = Number(n) || 0;
+      if (n < 1024) return n + ' B';
+      if (n < 1048576) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' KB';
+      return (n / 1048576).toFixed(n < 10485760 ? 1 : 0) + ' MB';
+    }
+    function sanitizeName(s){
+      return (String(s || 'file').replace(/[^\w.\-]+/g, '_').replace(/_+/g, '_').slice(-80)) || 'file';
+    }
+    function attachKindFromMime(mime){ return (mime && mime.indexOf('image/') === 0) ? 'image' : 'file'; }
+    function fileIconFor(mime, name){
+      var m = mime || '', ext = (name || '').split('.').pop().toLowerCase();
+      if (m === 'application/pdf' || ext === 'pdf') return 'fa-file-pdf';
+      if (m.indexOf('wordprocessingml') !== -1 || ext === 'docx' || ext === 'doc') return 'fa-file-word';
+      if (m.indexOf('spreadsheetml') !== -1 || ext === 'xlsx' || ext === 'xls') return 'fa-file-excel';
+      if (m.indexOf('image/') === 0) return 'fa-file-image';
+      return 'fa-file';
+    }
+    // Resolve a fresh-enough signed URL for a private attachment. Cached < the
+    // sign TTL so re-renders don't re-sign and a served URL never expires mid-use.
+    function signedUrlFor(path){
+      if (!path || !window.sb) return Promise.resolve(null);
+      var c = signedUrlCache[path];
+      if (c && c.exp > Date.now()) return Promise.resolve(c.url);
+      return window.sb.storage.from('message-attachments').createSignedUrl(path, SIGN_TTL).then(function(r){
+        if (r && r.data && r.data.signedUrl){
+          signedUrlCache[path] = { url: r.data.signedUrl, exp: Date.now() + SIGN_CACHE_MS };
+          return r.data.signedUrl;
+        }
+        return null;
+      }).catch(function(){ return null; });
+    }
+    function cachedSignedUrl(path){
+      var c = path && signedUrlCache[path];
+      return (c && c.exp > Date.now()) ? c.url : null;
+    }
+    // Revoke any failed-bubble object URLs (called before staging a new file and
+    // on conversation switch, so repeated retries don't stack blob URLs).
+    function flushRevokes(){
+      pendingRevoke.forEach(function(u){ try { URL.revokeObjectURL(u); } catch(e){} });
+      pendingRevoke = [];
     }
 
     // ─── Conversations list (left sidebar) ────────────────────────
@@ -8593,7 +8658,12 @@ document.addEventListener('DOMContentLoaded', async function() {
             '<div id="kmsg-chips"></div>' +
             '<button type="button" id="kmsg-chips-toggle" style="display:none;"><i class="fa-solid fa-comment-dots"></i> Suggested questions</button>' +
           '</div>' +
+          // Phase B2 — staged attachment preview (hidden until a file is picked).
+          '<div id="kmsg-staged" style="display:none;align-items:center;gap:.5rem;padding:.5rem;margin-bottom:.5rem;border:1px solid rgba(210,224,215,.6);border-radius:10px;background:rgba(255,255,255,.6);"></div>' +
           '<form id="kmsg-form" style="display:flex;gap:.5rem;align-items:flex-end;">' +
+            // Phase B2 — attach button + hidden file input (accept matches the B1 bucket allow-list).
+            '<input type="file" id="kmsg-file" accept="image/jpeg,image/png,image/webp,application/pdf,.docx,.xlsx" style="display:none;">' +
+            '<button type="button" id="kmsg-attach-btn" title="Attach a file" aria-label="Attach a file" style="width:2.5rem;height:2.5rem;flex-shrink:0;border:1px solid rgba(210,224,215,.6);border-radius:10px;background:#fff;color:var(--tm);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:.9375rem;"><i class="fa-solid fa-paperclip"></i></button>' +
             '<textarea id="kmsg-input" rows="1" placeholder="Type a message…" style="flex:1;resize:none;max-height:7.5rem;border:1px solid rgba(210,224,215,.6);border-radius:10px;padding:.625rem .75rem;font:inherit;font-size:.8125rem;background:#fff;"></textarea>' +
             '<button type="submit" id="kmsg-send" style="background:var(--gd);color:#fff;border:none;border-radius:10px;padding:.625rem 1rem;font-size:.8125rem;font-weight:700;cursor:pointer;">Send</button>' +
           '</form>' +
@@ -8642,6 +8712,14 @@ document.addEventListener('DOMContentLoaded', async function() {
         isNearBottom = true; hasNewHint = false; updateJumpPill();
       });
       refreshSendUI(); // initial state (empty → disabled look)
+
+      // Phase B2 — attach button opens the hidden file input; picking a file stages it.
+      var attachBtn = overlay.querySelector('#kmsg-attach-btn');
+      var fileInput = overlay.querySelector('#kmsg-file');
+      if (attachBtn && fileInput){
+        attachBtn.addEventListener('click', function(){ fileInput.click(); });
+        fileInput.addEventListener('change', onFilePicked);
+      }
 
       // Header actions: search (Phase 5, real in-thread search) + 3-dot drawer.
       var searchBtn = overlay.querySelector('#kmsg-search-btn');
@@ -8732,6 +8810,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     async function openConversation(convId){
       CURRENT_CONV_ID = convId;
+      flushRevokes(); // drop any failed-bubble blob URLs from the previous thread
       isNearBottom = true; hasNewHint = false; // fresh thread opens pinned to bottom
       hideTypingIndicator();
       joinTypingChannel(convId);
@@ -8851,7 +8930,8 @@ document.addEventListener('DOMContentLoaded', async function() {
       var counter = document.getElementById('kmsg-counter');
       var val = input ? (input.value || '') : '';
       var len = val.length;
-      var sendable = val.trim().length > 0 && len <= MAX_MSG_LEN;
+      // B2 — an attachment-only message (no caption) is sendable.
+      var sendable = (val.trim().length > 0 || !!STAGED) && len <= MAX_MSG_LEN;
       if (btn){
         btn.classList.toggle('is-sending', !!sending);
         btn.classList.toggle('is-off', !sending && !sendable);
@@ -8861,6 +8941,57 @@ document.addEventListener('DOMContentLoaded', async function() {
         counter.textContent = len + '/' + MAX_MSG_LEN;
         counter.className = len > MAX_MSG_LEN ? 'over' : (len >= MAX_MSG_LEN * 0.9 ? 'warn' : '');
       }
+    }
+
+    // ─── Attachment staging (Phase B2) ────────────────────────────
+    function mimeOf(file){
+      return file.type || ATTACH_EXT[(file.name || '').split('.').pop().toLowerCase()] || '';
+    }
+    function validateAttachment(file){
+      if (!file) return 'No file selected.';
+      if (!ATTACH_MIME[mimeOf(file)]) return 'Unsupported file type. Allowed: images, PDF, Word (.docx), Excel (.xlsx).';
+      if (file.size > ATTACH_MAX_BYTES) return 'File is larger than 10 MB. Please choose a smaller file.';
+      return null;
+    }
+    function onFilePicked(ev){
+      var input = ev.target;
+      var file = input.files && input.files[0];
+      input.value = ''; // let the same file be re-picked later
+      if (!file) return;
+      var err = validateAttachment(file);
+      if (err){ if (window.__konekToast) window.__konekToast(err, true); return; }  // reject — no upload
+      flushRevokes();                 // drop any prior failed-bubble blob URLs
+      if (STAGED && STAGED.objectUrl){ try { URL.revokeObjectURL(STAGED.objectUrl); } catch(e){} }
+      var mime = mimeOf(file) || 'application/octet-stream';
+      var type = attachKindFromMime(mime);
+      STAGED = { file: file, type: type, name: file.name || 'file', size: file.size, mime: mime,
+                 objectUrl: (type === 'image') ? URL.createObjectURL(file) : null };
+      renderStagedChip();
+      refreshSendUI();
+    }
+    function unstageAttachment(){
+      if (STAGED && STAGED.objectUrl){ try { URL.revokeObjectURL(STAGED.objectUrl); } catch(e){} }
+      STAGED = null;
+      renderStagedChip();
+      refreshSendUI();
+    }
+    function renderStagedChip(){
+      var host = document.getElementById('kmsg-staged');
+      if (!host) return;
+      if (!STAGED){ host.style.display = 'none'; host.innerHTML = ''; return; }
+      host.style.display = 'flex';
+      var thumb = (STAGED.type === 'image')
+        ? '<img src="' + esc(STAGED.objectUrl || '') + '" alt="" style="width:2.25rem;height:2.25rem;border-radius:6px;object-fit:cover;flex-shrink:0;">'
+        : '<span style="width:2.25rem;height:2.25rem;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;background:rgba(46,122,70,.1);color:var(--gd);flex-shrink:0;"><i class="fa-solid ' + fileIconFor(STAGED.mime, STAGED.name) + '"></i></span>';
+      host.innerHTML =
+        thumb +
+        '<div style="flex:1;min-width:0;">' +
+          '<div style="font-size:.75rem;font-weight:600;color:var(--td);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(STAGED.name) + '</div>' +
+          '<div style="font-size:.6563rem;color:var(--tl);">' + esc(fmtBytes(STAGED.size)) + '</div>' +
+        '</div>' +
+        '<button type="button" id="kmsg-staged-x" title="Remove attachment" aria-label="Remove attachment" style="width:1.75rem;height:1.75rem;border:none;border-radius:50%;background:rgba(255,255,255,.6);color:var(--tm);cursor:pointer;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;"><i class="fa-solid fa-xmark"></i></button>';
+      var x = document.getElementById('kmsg-staged-x');
+      if (x) x.addEventListener('click', unstageAttachment);
     }
 
     function renderMessages(convId){
@@ -9012,6 +9143,13 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
       }
 
+      // Phase B2 — image / file attachments (private bucket → signed URL reads).
+      if (m.attachment_type === 'image'){
+        renderImageAttachment(bubble, m);
+      } else if (m.attachment_type === 'file'){
+        renderFileAttachment(bubble, m, mine);
+      }
+
       if (m.body){
         var text = document.createElement('div');
         // Phase 5 — highlight search matches (highlightBody escapes every segment,
@@ -9039,6 +9177,79 @@ document.addEventListener('DOMContentLoaded', async function() {
       }
 
       return wrap;
+    }
+
+    // ---- Phase B2 attachment renderers ---------------------------------------
+    // Inline image thumbnail. Optimistic rows use __localPreview (no signing);
+    // persisted rows resolve a signed URL (cached < TTL). Click opens the shared
+    // zoom viewer. Signing failure shows a muted "Attachment unavailable".
+    function renderImageAttachment(bubble, m){
+      var box = document.createElement('div');
+      box.style.cssText = 'position:relative;max-width:220px;margin-bottom:' + (m.body ? '.375rem' : '0') + ';';
+      var img = document.createElement('img');
+      img.alt = m.file_name || 'Image attachment';
+      img.style.cssText = 'display:block;max-width:220px;max-height:260px;width:auto;border-radius:10px;cursor:pointer;background:rgba(0,0,0,.06);';
+      box.appendChild(img);
+
+      if (m.__localPreview){
+        img.src = m.__localPreview;
+        if (m.__uploading){
+          var ov = document.createElement('div');
+          ov.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.28);border-radius:10px;';
+          ov.innerHTML = '<span class="kmsg-send-spin" style="width:1.25rem;height:1.25rem;border-width:3px;"></span>';
+          box.appendChild(ov);
+        }
+      } else {
+        var cached = cachedSignedUrl(m.attachment_path);
+        if (cached){ img.src = cached; }
+        else {
+          img.style.minWidth = '120px'; img.style.minHeight = '90px'; // skeleton box while signing
+          signedUrlFor(m.attachment_path).then(function(url){
+            if (url){ img.src = url; }
+            else { showAttachUnavailable(box, img); }
+          });
+        }
+      }
+      img.addEventListener('click', function(){
+        var u = m.__localPreview || cachedSignedUrl(m.attachment_path);
+        if (u){ if (typeof window.openImageViewer === 'function') window.openImageViewer(u); return; }
+        signedUrlFor(m.attachment_path).then(function(url){
+          if (url && typeof window.openImageViewer === 'function') window.openImageViewer(url);
+        });
+      });
+      bubble.appendChild(box);
+    }
+    function showAttachUnavailable(box, img){
+      if (img && img.parentNode) img.parentNode.removeChild(img);
+      var u = document.createElement('div');
+      u.style.cssText = 'display:flex;align-items:center;gap:.5rem;padding:.5rem .625rem;border-radius:10px;background:rgba(0,0,0,.045);border:1px dashed rgba(150,160,155,.55);color:var(--tl);font-size:.75rem;';
+      u.innerHTML = '<i class="fa-regular fa-image"></i> Attachment unavailable';
+      box.appendChild(u);
+    }
+    // File chip — icon + name + human size + download. Click resolves a signed
+    // URL (fresh-enough via cache) and opens it in a new tab.
+    function renderFileAttachment(bubble, m, mine){
+      var chip = document.createElement('div');
+      chip.style.cssText = 'display:flex;gap:.5rem;align-items:center;padding:.5rem .625rem;border-radius:10px;max-width:260px;margin-bottom:' + (m.body ? '.375rem' : '0') + ';cursor:pointer;background:' +
+        (mine ? 'rgba(255,255,255,.95)' : 'rgba(234,245,238,.7)') + ';border:1px solid rgba(210,224,215,.55);color:var(--td);';
+      var right = m.__uploading
+        ? '<span class="kmsg-send-spin" style="width:.9rem;height:.9rem;border-width:2px;border-top-color:var(--gd);"></span>'
+        : '<i class="fa-solid fa-download" style="color:var(--tm);"></i>';
+      chip.innerHTML =
+        '<span style="width:2.25rem;height:2.25rem;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;background:rgba(46,122,70,.1);color:var(--gd);flex-shrink:0;font-size:1rem;"><i class="fa-solid ' + fileIconFor(m.mime_type, m.file_name) + '"></i></span>' +
+        '<div style="flex:1;min-width:0;">' +
+          '<div style="font-size:.75rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(m.file_name || 'Attachment') + '</div>' +
+          '<div style="font-size:.6875rem;opacity:.8;">' + esc(fmtBytes(m.file_size)) + '</div>' +
+        '</div>' +
+        '<span style="flex-shrink:0;">' + right + '</span>';
+      chip.addEventListener('click', function(){
+        if (m.__uploading || !m.attachment_path) return;   // still uploading / optimistic
+        signedUrlFor(m.attachment_path).then(function(url){
+          if (url) window.open(url, '_blank', 'noopener');
+          else if (window.__konekToast) window.__konekToast('Attachment unavailable.', true);
+        });
+      });
+      bubble.appendChild(chip);
     }
 
     // ---- Phase 5 helpers: in-thread search + property shortcut ---------------
@@ -9134,7 +9345,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       var input = document.getElementById('kmsg-input');
       if (!input || !CURRENT_CONV_ID) return;
       var body = (input.value || '').trim();
-      if (!body) return;
+      if (!body && !STAGED) return;   // B2 — allow attachment-only (no caption)
       if (__konekHasContactInfo(body)){
         // Hard block — leave input.value intact so the broker can edit & resend.
         if (window.__konekToast) window.__konekToast("Keep it on ProList — phone numbers, landlines and email addresses can't be sent in chat.", true);
@@ -9149,42 +9360,85 @@ document.addEventListener('DOMContentLoaded', async function() {
       var uid = currentUid();
       if (!uid){ console.warn('[k-messages] submit: not signed in'); return; }
 
+      var staged = STAGED;          // capture the single staged attachment
+      var convAtSend = CURRENT_CONV_ID;
       sending = true;
       input.disabled = true;
       refreshSendUI(); // show the in-flight sending state
 
-      // Optimistic UI: append a pending bubble immediately.
+      // Optimistic UI: append a pending bubble immediately. For an attachment,
+      // carry a LOCAL preview (objectURL for images; name/size for files) + an
+      // "uploading" flag so the bubble shows before the signed URL exists.
       var tempId = 'tmp-' + Date.now();
       var optimistic = {
-        id: tempId, conversation_id: CURRENT_CONV_ID, sender_id: uid,
-        body: body, attachment_listing_id: null,
+        id: tempId, conversation_id: convAtSend, sender_id: uid,
+        body: body || null, attachment_listing_id: null,
         created_at: new Date().toISOString(), __pending: true
       };
-      (MESSAGES_BY_CONV[CURRENT_CONV_ID] = MESSAGES_BY_CONV[CURRENT_CONV_ID] || []).push(optimistic);
-      renderMessages(CURRENT_CONV_ID);
+      if (staged){
+        optimistic.attachment_type = staged.type;
+        optimistic.attachment_path = null;      // not uploaded yet
+        optimistic.file_name = staged.name;
+        optimistic.file_size = staged.size;
+        optimistic.mime_type = staged.mime;
+        optimistic.__localPreview = staged.objectUrl || null;
+        optimistic.__uploading = true;
+      }
+      var rows = (MESSAGES_BY_CONV[convAtSend] = MESSAGES_BY_CONV[convAtSend] || []);
+      rows.push(optimistic);
+      function repaint(){ if (convAtSend === CURRENT_CONV_ID) renderMessages(convAtSend); }
+      repaint();
 
-      var res = await window.sb.from('messages').insert({
-        conversation_id: CURRENT_CONV_ID,
-        sender_id: uid,
-        body: body
-      }).select('*').single();
-
-      var rows = MESSAGES_BY_CONV[CURRENT_CONV_ID] || [];
-      var idx = rows.findIndex(function(r){ return r.id === tempId; });
-      if (res.error){
-        console.warn('[k-messages] send error', res.error);
-        if (idx >= 0) rows[idx].__failed = true, rows[idx].__pending = false;
-        renderMessages(CURRENT_CONV_ID);
+      // Shared rollback: mark the optimistic row failed, re-enable, toast. Queue
+      // its local preview for revoke-on-next-stage so retries don't stack blobs.
+      function failOptimistic(msg){
+        var i = rows.findIndex(function(r){ return r.id === tempId; });
+        if (i >= 0){
+          rows[i].__failed = true; rows[i].__pending = false; rows[i].__uploading = false;
+          if (rows[i].__localPreview) pendingRevoke.push(rows[i].__localPreview);
+        }
+        STAGED = null; renderStagedChip();     // clear composer (retry = re-pick)
+        repaint();
         input.disabled = false; sending = false;
         refreshSendUI();
+        if (msg && window.__konekToast) window.__konekToast(msg, true);
+      }
+
+      // Upload FIRST (if any) — no message row is inserted on upload failure.
+      var attachPath = null;
+      if (staged){
+        attachPath = convAtSend + '/' + Date.now() + '_' + sanitizeName(staged.name);
+        var up = await window.sb.storage.from('message-attachments')
+          .upload(attachPath, staged.file, { contentType: staged.mime, upsert: false });
+        if (up.error){
+          console.warn('[k-messages] attachment upload', up.error);
+          failOptimistic('Upload failed — please try again.');
+          return;
+        }
+      }
+
+      var payload = { conversation_id: convAtSend, sender_id: uid, body: body || null };
+      if (staged){
+        payload.attachment_type = staged.type;
+        payload.attachment_path = attachPath;
+        payload.file_name = staged.name;
+        payload.file_size = staged.size;
+        payload.mime_type = staged.mime;
+      }
+      var res = await window.sb.from('messages').insert(payload).select('*').single();
+
+      if (res.error){
+        console.warn('[k-messages] send error', res.error);
+        // Insert failed after a successful upload → remove the orphan object so
+        // no file is left with no message pointing at it.
+        if (attachPath){ try { window.sb.storage.from('message-attachments').remove([attachPath]); } catch(e){} }
+        failOptimistic('Message failed to send.');
         return;
       }
       // Replace optimistic with server row — idempotently. The realtime channel
       // also echoes our own INSERT back; if that echo lost the race and already
-      // pushed the server row, a plain splice would leave a duplicate. Mutate the
-      // captured array in place (correct conversation even if CURRENT_CONV_ID
-      // changed during the await): drop the temp row AND any echoed server-id
-      // row, then append the server row once.
+      // pushed the server row, a plain splice would leave a duplicate. Drop the
+      // temp row AND any echoed server-id row, then append the server row once.
       for (var ri = rows.length - 1; ri >= 0; ri--){
         if (rows[ri].id === tempId || rows[ri].id === res.data.id) rows.splice(ri, 1);
       }
@@ -9193,13 +9447,17 @@ document.addEventListener('DOMContentLoaded', async function() {
       input.style.height = 'auto';
       input.disabled = false;
       sending = false;
+      // Success — clear the staged attachment + revoke its local preview (the
+      // server row renders via signed URL now).
+      if (staged && staged.objectUrl){ try { URL.revokeObjectURL(staged.objectUrl); } catch(e){} }
+      STAGED = null; renderStagedChip();
       refreshSendUI(); // cleared input → back to disabled look
-      renderMessages(CURRENT_CONV_ID);
+      repaint();
 
       // Advance our own last_read_at past the message we just sent (stamp it with
       // the message's own server time so it stays read even after we navigate away
       // and the conv list reloads without this conversation being active).
-      markRead(CURRENT_CONV_ID, res.data && res.data.created_at);
+      markRead(convAtSend, res.data && res.data.created_at);
 
       // Refresh the sidebar preview/order — the trigger already updated
       // conversations.last_message_at, but our local CONVERSATIONS array is
@@ -12680,14 +12938,18 @@ document.addEventListener('DOMContentLoaded', async function() {
       // fall back to the (thumbnail or generated-SVG) avatar already resolved
       return c.other_avatar || '';
     }
-    function openProfileViewer(c){
+    // Generalized image viewer — takes an explicit URL. openProfileViewer is a
+    // thin caller (profile-photo zoom unchanged); chat image attachments call
+    // window.openImageViewer(signedUrl) directly.
+    function openImageViewer(url){
       buildViewer();
       var img = document.getElementById('kpv-img');
-      if (img) img.src = fullAvatarSrc(c);
+      if (img) img.src = url || '';
       if (window.__kpvReset) window.__kpvReset();
       if (typeof window.showModal === 'function') window.showModal('kmsg-photo-viewer');
       else { var v = document.getElementById('kmsg-photo-viewer'); if (v) v.classList.add('show'); }
     }
+    function openProfileViewer(c){ openImageViewer(fullAvatarSrc(c)); }
     function closeProfileViewer(){
       if (typeof window.closeModal === 'function') window.closeModal('kmsg-photo-viewer');
       else { var v = document.getElementById('kmsg-photo-viewer'); if (v) v.classList.remove('show'); }
@@ -12698,6 +12960,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     window.openChatDrawer = openChatDrawer;
     window.closeChatDrawer = closeChatDrawer;
     window.openProfileViewer = openProfileViewer;
+    window.openImageViewer = openImageViewer;
 
     // One global Esc handler: viewer first, then drawer.
     if (!window.__kmsgEscBound){

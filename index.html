@@ -8409,7 +8409,9 @@ document.addEventListener('DOMContentLoaded', async function() {
         return;
       }
 
-      CONVERSATIONS.forEach(function(c){
+      // Build one conversation row (markup + behavior UNCHANGED — grouping only
+      // reorders rows into buckets and inserts section headers between them).
+      function buildConvItem(c){
         var active = (c.id === CURRENT_CONV_ID);
         var item = document.createElement('div');
         item.className = 'kmsg-item';
@@ -8432,8 +8434,42 @@ document.addEventListener('DOMContentLoaded', async function() {
             '</div>' +
           '</div>';
         item.addEventListener('click', function(){ openConversation(c.id); });
-        list.appendChild(item);
+        return item;
+      }
+
+      // Section header (#3) — small muted label between buckets. Removed on the
+      // next re-render by the existing non-.cl-hd/.kmsg-item wipe above.
+      function groupHeader(text){
+        var h = document.createElement('div');
+        h.className = 'kmsg-group';
+        h.style.cssText = 'font-size:.625rem;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--tl);padding:.75rem .875rem .25rem;';
+        h.textContent = text;
+        return h;
+      }
+
+      // Bucket the (already last_message_at DESC-ordered) conversations. Unread
+      // first regardless of age, then Today / Yesterday / Earlier by the same
+      // date math fmtTime uses. Each conversation lands in exactly one bucket.
+      var unread = [], today = [], yesterday = [], earlier = [];
+      var now = new Date();
+      CONVERSATIONS.forEach(function(c){
+        if (c.unread){ unread.push(c); return; }
+        var d = c.last_message_at ? new Date(c.last_message_at) : null;
+        if (d && !isNaN(d.getTime())){
+          if (d.toDateString() === now.toDateString()){ today.push(c); return; }
+          if (Math.floor((now.getTime() - d.getTime()) / 86400000) === 1){ yesterday.push(c); return; }
+        }
+        earlier.push(c);
       });
+      function renderBucket(label, arr){
+        if (!arr.length) return;               // hide empty sections
+        list.appendChild(groupHeader(label));
+        arr.forEach(function(c){ list.appendChild(buildConvItem(c)); });
+      }
+      if (unread.length) renderBucket('Unread (' + unread.length + ')', unread);
+      renderBucket('Today', today);
+      renderBucket('Yesterday', yesterday);
+      renderBucket('Earlier', earlier);
       // Re-apply any active search query so a realtime re-render doesn't
       // resurface rows the user has filtered out.
       var si = document.getElementById('chat-search');
@@ -8953,6 +8989,26 @@ document.addEventListener('DOMContentLoaded', async function() {
             if (typeof window.openDetail === 'function') window.openDetail(m.attachment_listing_id);
           });
           bubble.appendChild(cardEl);
+        } else {
+          // #18 — attachment present but the listing resolved to null (RLS
+          // dropped an archived/deleted row for the inquirer). Render a disabled
+          // "no longer available" card instead of nothing. Null-detection only —
+          // no status check — so the owner (who can still read their own archived
+          // row) keeps the normal interactive card above. Non-clickable.
+          var plabel2 = document.createElement('div');
+          plabel2.textContent = '📌 Property Inquiry';
+          plabel2.style.cssText = 'font-size:.6563rem;font-weight:700;letter-spacing:.3px;margin-bottom:.25rem;color:' +
+            (mine ? 'rgba(255,255,255,.75)' : 'var(--tl)') + ';';
+          bubble.appendChild(plabel2);
+          var gone = document.createElement('div');
+          gone.style.cssText = 'display:flex;gap:.5rem;align-items:center;padding:.5rem;border-radius:10px;background:rgba(0,0,0,.045);border:1px dashed rgba(150,160,155,.55);margin-bottom:.375rem;opacity:.9;cursor:default;';
+          gone.innerHTML =
+            '<div style="width:2.75rem;height:2.75rem;border-radius:8px;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.06);flex-shrink:0;"><i class="fa-solid fa-house-circle-xmark" style="color:var(--tl);font-size:1rem;"></i></div>' +
+            '<div style="flex:1;min-width:0;">' +
+              '<div style="font-size:.75rem;font-weight:700;color:var(--tm);">Listing No Longer Available</div>' +
+              '<div style="font-size:.6875rem;color:var(--tl);">This property has been removed or archived.</div>' +
+            '</div>';
+          bubble.appendChild(gone);
         }
       }
 
@@ -9502,6 +9558,9 @@ document.addEventListener('DOMContentLoaded', async function() {
       q = (q || '').trim().toLowerCase();
       var list = document.querySelector('#page-messages .chat-list');
       if (!list) return;
+      // Group headers (#3) only make sense in the full list; when a query is
+      // active, flatten to a plain filtered list by hiding them, then restore.
+      list.querySelectorAll('.kmsg-group').forEach(function(h){ h.style.display = q ? 'none' : ''; });
       list.querySelectorAll('.kmsg-item').forEach(function(item){
         if (!item.dataset.id) return; // skip the "no conversations" placeholder
         var hit = !q || (item.textContent || '').toLowerCase().indexOf(q) !== -1;
@@ -12361,6 +12420,14 @@ document.addEventListener('DOMContentLoaded', async function() {
       '.kmd-row.disabled{opacity:.55;cursor:default;}',
       '.kmd-row.enabled{cursor:pointer;}',
       '.kmd-row.enabled:hover{background:rgba(234,245,238,.6);}',
+      // "Listings by this broker" (#6) — compact horizontal cards in the drawer.
+      '.kmd-listing{display:flex;gap:.625rem;align-items:center;padding:.5rem;border-radius:10px;cursor:pointer;border:1px solid rgba(210,224,215,.5);background:rgba(255,255,255,.6);margin-bottom:.5rem;transition:background .15s ease;}',
+      '.kmd-listing:hover{background:rgba(234,245,238,.7);}',
+      '.kmd-listing-img{width:3rem;height:3rem;border-radius:8px;object-fit:cover;flex-shrink:0;background:rgba(0,0,0,.05);}',
+      '.kmd-listing-body{flex:1;min-width:0;}',
+      '.kmd-listing-name{font-size:.8125rem;font-weight:700;color:var(--td);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
+      '.kmd-listing-price{font-size:.75rem;font-weight:700;color:var(--gd);margin-top:.0625rem;}',
+      '.kmd-listing-loc{font-size:.6875rem;color:var(--tl);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:.0625rem;}',
       '#kmsg-photo-viewer .kpv-img{max-width:92vw;max-height:84vh;object-fit:contain;transition:transform .2s ease;transform-origin:center center;user-select:none;-webkit-user-drag:none;}',
       '#kmsg-photo-viewer .kpv-toolbar{position:absolute;bottom:1.375rem;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:.625rem;background:rgba(0,0,0,.42);border-radius:999px;padding:.5rem .875rem;}',
       '#kmsg-photo-viewer .kpv-btn{width:2.5rem;height:2.5rem;border:none;border-radius:50%;background:rgba(255,255,255,.15);color:#fff;cursor:pointer;font-size:.9375rem;display:inline-flex;align-items:center;justify-content:center;}',
@@ -12416,6 +12483,10 @@ document.addEventListener('DOMContentLoaded', async function() {
             '<div class="kmd-info-meta" id="kmd-info-meta"></div>' +
             '<button class="kmd-profile-link" id="kmd-profile-link" type="button"><i class="fa-solid fa-user"></i> View full profile</button>' +
           '</div>' +
+          // Listings by this broker (#6) — REAL. Populated by fillOtherListings()
+          // when the drawer opens (reuses the broker-listings query pattern).
+          '<div class="kmd-label">Listings by this broker</div>' +
+          '<div id="kmd-listings"><div class="kmd-empty" style="padding:1rem .625rem;">Loading…</div></div>' +
           // Media — PLACEHOLDER (tabs switch active only; no data this phase)
           '<div class="kmd-label">Media</div>' +
           '<div class="kmd-tabs" id="kmd-media-tabs">' +
@@ -12467,8 +12538,12 @@ document.addEventListener('DOMContentLoaded', async function() {
       // schema — cannot reuse listing_reports, which is listing-scoped)
       var priv = d.querySelector('#kmd-privacy');
       priv.appendChild(row('fa-flag', 'Report User', { title:'Coming soon' }));
-      priv.appendChild(row('fa-shield-halved', 'Privacy', { title:'Coming soon' }));
-      priv.appendChild(row('fa-circle-question', 'Help', { title:'Coming soon' }));
+      // Help (#16) — enabled; routes to the existing #page-help (no duplicated
+      // help content). Close the drawer first, then navigate.
+      priv.appendChild(row('fa-circle-question', 'Help', { enabled:true, onClick: function(){
+        closeChatDrawer();
+        if (typeof window.goTo === 'function') window.goTo('help');
+      } }));
     }
 
     function buildViewer(){
@@ -12517,9 +12592,73 @@ document.addEventListener('DOMContentLoaded', async function() {
         : '';
       if (lk) lk.style.display = (c && c.other_id) ? '' : 'none';
     }
+    // Listings by this broker (#6). Cached per broker id so reopening the drawer
+    // (or switching back to a conversation) doesn't re-hit the network.
+    var otherListingsCache = {};
+    function fillOtherListings(c){
+      var host = document.getElementById('kmd-listings');
+      if (!host) return;
+      var bid = c && c.other_id;
+      if (!bid){ host.innerHTML = '<div class="kmd-empty" style="padding:1rem .625rem;">No other active listings</div>'; return; }
+
+      function paint(rows){
+        // Stale guard: the drawer may have been closed or pointed at a different
+        // broker during the await — only paint if this is still the active one.
+        var cur = window.__kmsgActiveConv;
+        if (!cur || cur.other_id !== bid) return;
+        var host2 = document.getElementById('kmd-listings');
+        if (!host2) return;
+        if (!rows.length){
+          host2.innerHTML = '<div class="kmd-empty" style="padding:1rem .625rem;">No other active listings</div>';
+          return;
+        }
+        host2.innerHTML = '';
+        rows.forEach(function(p){
+          var card = document.createElement('div');
+          card.className = 'kmd-listing';
+          var loc = (typeof window.__plCityRegion === 'function') ? window.__plCityRegion(p) : (p.loc || '');
+          card.innerHTML =
+            '<img class="kmd-listing-img" src="' + (p.img || '') + '" alt="" loading="lazy">' +
+            '<div class="kmd-listing-body">' +
+              '<div class="kmd-listing-name"></div>' +
+              '<div class="kmd-listing-price"></div>' +
+              '<div class="kmd-listing-loc"></div>' +
+            '</div>';
+          card.querySelector('.kmd-listing-name').textContent = p.name || 'Listing';
+          card.querySelector('.kmd-listing-price').textContent = p.price || '';
+          card.querySelector('.kmd-listing-loc').textContent = loc;
+          card.addEventListener('click', function(){
+            // openDetail navigates away from the messages page; close the
+            // fixed drawer first so it doesn't linger over the detail view.
+            closeChatDrawer();
+            if (typeof window.openDetail === 'function') window.openDetail(p.id);
+          });
+          host2.appendChild(card);
+        });
+      }
+
+      if (otherListingsCache[bid]){ paint(otherListingsCache[bid]); return; }
+      host.innerHTML = '<div class="kmd-empty" style="padding:1rem .625rem;">Loading…</div>';
+      if (!window.sb){ paint([]); return; }
+      // Same query pattern as renderDetailRelated (broker_id + active, newest
+      // first). Includes the conversation's own listing by design.
+      window.sb.from('listings')
+        .select('id,title,barangay,city,province,price,images,created_at')
+        .eq('broker_id', bid).eq('status', 'active')
+        .order('created_at', { ascending: false }).limit(8)
+        .then(function(res){
+          var rows = ((res && res.data) || []).map(function(r){
+            return (typeof window.mapListing === 'function') ? window.mapListing(r) : r;
+          });
+          otherListingsCache[bid] = rows;
+          paint(rows);
+        });
+    }
+
     function openChatDrawer(){
       buildDrawer();
       fillInfo(window.__kmsgActiveConv);
+      fillOtherListings(window.__kmsgActiveConv);
       var d = document.getElementById('kmsg-drawer');
       var s = document.getElementById('kmsg-drawer-scrim');
       if (s) s.classList.add('show');

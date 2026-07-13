@@ -8616,6 +8616,21 @@ document.addEventListener('DOMContentLoaded', async function() {
           '#kmsg-search-close{width:1.75rem;height:1.75rem;border:none;border-radius:50%;background:rgba(255,255,255,.55);color:var(--tm);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:.8125rem;flex-shrink:0;}' +
           '#kmsg-search-close:hover{background:rgba(234,245,238,.9);}' +
           '#kmsg-body mark{background:#ffe58a;color:inherit;border-radius:3px;padding:0 1px;}' +
+          // Phase D1 — scroll-to-message flash + context-menu popover.
+          '@keyframes kmsgflash{0%,100%{background:transparent}25%{background:rgba(255,214,74,.32)}}' +
+          '.kmsg-flash{border-radius:12px;animation:kmsgflash 1.5s ease;}' +
+          '#kmsg-ctx{position:fixed;z-index:970;min-width:172px;background:#fff;border:1px solid rgba(210,224,215,.7);border-radius:12px;box-shadow:0 8px 30px rgba(10,30,18,.18);padding:.3125rem;display:none;}' +
+          '#kmsg-ctx.show{display:block;}' +
+          '.kmsg-ctx-item{display:flex;align-items:center;gap:.625rem;width:100%;padding:.5rem .625rem;border:none;background:transparent;border-radius:8px;font:inherit;font-size:.8125rem;color:var(--td);cursor:pointer;text-align:left;}' +
+          '.kmsg-ctx-item:hover{background:rgba(234,245,238,.7);}' +
+          '.kmsg-ctx-item i{width:1rem;text-align:center;color:var(--ts);}' +
+          '.kmsg-ctx-item.danger{color:#d94f4f;}' +
+          '.kmsg-ctx-item.danger i{color:#d94f4f;}' +
+          '.kmsg-ctx-confirm{padding:.5rem .625rem;}' +
+          '.kmsg-ctx-confirm-q{font-size:.8125rem;color:var(--td);font-weight:600;margin-bottom:.5rem;}' +
+          '.kmsg-ctx-confirm-row{display:flex;gap:.5rem;}' +
+          '.kmsg-ctx-btn{flex:1;padding:.4375rem;border-radius:8px;border:1px solid rgba(210,224,215,.7);background:#fff;font:inherit;font-size:.75rem;font-weight:600;cursor:pointer;color:var(--tm);}' +
+          '.kmsg-ctx-btn.danger{background:#d94f4f;border-color:#d94f4f;color:#fff;}' +
         '</style>' +
         '<div id="kmsg-header" style="padding:.875rem 1.125rem;border-bottom:1px solid rgba(210,224,215,.4);background:rgba(255,255,255,.6);display:flex;align-items:center;gap:.625rem;flex-shrink:0;">' +
           '<div id="kmsg-hdr-empty" style="font-size:.8125rem;color:var(--tm);">Select a conversation to start messaging.</div>' +
@@ -8658,6 +8673,8 @@ document.addEventListener('DOMContentLoaded', async function() {
             '<div id="kmsg-chips"></div>' +
             '<button type="button" id="kmsg-chips-toggle" style="display:none;"><i class="fa-solid fa-comment-dots"></i> Suggested questions</button>' +
           '</div>' +
+          // Phase D1 — reply-preview bar (hidden until "Reply" is chosen).
+          '<div id="kmsg-reply-bar" style="display:none;align-items:center;gap:.5rem;padding:.5rem .625rem;margin-bottom:.5rem;border-left:3px solid var(--gd);border-radius:8px;background:rgba(234,245,238,.6);"></div>' +
           // Phase B2 — staged attachment preview (hidden until a file is picked).
           '<div id="kmsg-staged" style="display:none;align-items:center;gap:.5rem;padding:.5rem;margin-bottom:.5rem;border:1px solid rgba(210,224,215,.6);border-radius:10px;background:rgba(255,255,255,.6);"></div>' +
           '<form id="kmsg-form" style="display:flex;gap:.5rem;align-items:flex-end;">' +
@@ -8720,6 +8737,9 @@ document.addEventListener('DOMContentLoaded', async function() {
         attachBtn.addEventListener('click', function(){ fileInput.click(); });
         fileInput.addEventListener('change', onFilePicked);
       }
+
+      // D1 — message context menu (right-click / long-press on bubbles).
+      wireMsgMenu();
 
       // Header actions: search (Phase 5, real in-thread search) + 3-dot drawer.
       var searchBtn = overlay.querySelector('#kmsg-search-btn');
@@ -9067,6 +9087,8 @@ document.addEventListener('DOMContentLoaded', async function() {
       // (below) align to the sender's side alongside the bubble.
       var wrap = document.createElement('div');
       wrap.className = 'k-msg-wrap';
+      // D1 F1 — per-message DOM anchor for the context menu + scroll-to-message.
+      if (m.id != null) wrap.dataset.mid = m.id;
       wrap.style.cssText = 'display:flex;flex-direction:column;align-items:' +
         (mine ? 'flex-end' : 'flex-start') + ';margin-top:' + (opts.topGap ? '10px' : '0') + ';';
       if (m.__pending) wrap.style.opacity = '.55';
@@ -9079,6 +9101,18 @@ document.addEventListener('DOMContentLoaded', async function() {
         wrap.appendChild(tl);
       }
 
+      // D1 — soft-delete tombstone. Renders a muted marker and NOTHING else
+      // (no body/attachment/reply-header/status/menu), so deleted content never
+      // leaks. data-mid is still set above so reply-quotes can scroll to it.
+      if (m.deleted_at){
+        var tomb = document.createElement('div');
+        tomb.className = 'k-msg-bubble';
+        tomb.style.cssText = 'max-width:72%;padding:.5rem .8125rem;border-radius:16px;font-size:.75rem;font-style:italic;color:var(--tl);background:rgba(0,0,0,.04);border:1px dashed rgba(150,160,155,.5);';
+        tomb.textContent = '🚫 This message was deleted';
+        wrap.appendChild(tomb);
+        return wrap;
+      }
+
       var bubble = document.createElement('div');
       bubble.className = 'k-msg-bubble';
       // Exact time on hover (readability without repeating it on every bubble).
@@ -9089,6 +9123,13 @@ document.addEventListener('DOMContentLoaded', async function() {
         (mine ? 'var(--gd)' : 'rgba(255,255,255,.9)') + ';border:1px solid ' +
         (mine ? 'transparent' : 'rgba(210,224,215,.4)') + ';' +
         (mine ? '' : 'box-shadow:0 1px 3px rgba(10,30,18,.06);');
+
+      // D1 — quoted-reply header (above content). Resolve the original from the
+      // in-memory thread; XSS-safe (createElement + textContent, never innerHTML).
+      if (m.reply_to_message_id){
+        var qh = buildQuotedHeader(m.reply_to_message_id, mine);
+        if (qh) bubble.appendChild(qh);
+      }
 
       if (m.attachment_listing_id){
         var card = resolveListingCard(m.attachment_listing_id);
@@ -9252,6 +9293,215 @@ document.addEventListener('DOMContentLoaded', async function() {
       bubble.appendChild(chip);
     }
 
+    // ═══ Phase D1 — message actions (reply + delete) ══════════════════════════
+    var REPLYING_TO = null;   // { id, name, snippet } when composing a reply
+
+    function msgById(mid){
+      var rows = MESSAGES_BY_CONV[CURRENT_CONV_ID] || [];
+      for (var i = 0; i < rows.length; i++){ if (rows[i].id === mid) return rows[i]; }
+      return null;
+    }
+    // One-line quote text for a message (no full content leak; deleted → marker).
+    function quotedSnippet(row){
+      if (!row) return 'Original message';
+      if (row.deleted_at) return '[deleted]';
+      if (row.body) { var s = String(row.body).replace(/\s+/g, ' ').trim(); return s.length > 80 ? s.slice(0, 80) + '…' : s; }
+      if (row.attachment_type || row.attachment_listing_id) return '[attachment]';
+      return 'Message';
+    }
+    function quotedName(row, mineViewer){
+      if (!row) return '';
+      var uid = currentUid();
+      if (row.sender_id === uid) return 'You';
+      return (window.__kmsgActiveConv && window.__kmsgActiveConv.other_name) || 'Broker';
+    }
+    // In-bubble quoted-reply header — XSS-safe (createElement + textContent only).
+    function buildQuotedHeader(replyId, mine){
+      var orig = msgById(replyId);
+      var box = document.createElement('div');
+      box.style.cssText = 'border-left:3px solid ' + (mine ? 'rgba(255,255,255,.6)' : 'var(--gd)') +
+        ';padding:.1875rem .5rem;margin-bottom:.375rem;border-radius:4px;cursor:pointer;background:' +
+        (mine ? 'rgba(255,255,255,.14)' : 'rgba(46,122,70,.06)') + ';max-width:100%;';
+      var nm = document.createElement('div');
+      nm.textContent = quotedName(orig, mine);
+      nm.style.cssText = 'font-size:.6563rem;font-weight:700;color:' + (mine ? 'rgba(255,255,255,.85)' : 'var(--gd)') + ';';
+      var sn = document.createElement('div');
+      sn.textContent = quotedSnippet(orig);
+      sn.style.cssText = 'font-size:.6875rem;color:' + (mine ? 'rgba(255,255,255,.8)' : 'var(--tm)') + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+      box.appendChild(nm); box.appendChild(sn);
+      box.addEventListener('click', function(ev){ ev.stopPropagation(); scrollToMessage(replyId); });
+      return box;
+    }
+
+    // F3 — scroll to a message by id + brief flash. No-op if not in the DOM.
+    function scrollToMessage(mid){
+      var body = document.getElementById('kmsg-body');
+      if (!body || mid == null) return;
+      var el = body.querySelector('[data-mid="' + String(mid) + '"]');
+      if (!el) return;
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.remove('kmsg-flash'); void el.offsetWidth; // restart animation
+      el.classList.add('kmsg-flash');
+      setTimeout(function(){ el.classList.remove('kmsg-flash'); }, 1500);
+    }
+
+    // Reply state + preview bar (mirrors the B2 staged-attachment strip).
+    function startReply(row){
+      if (!row || row.__pending || row.deleted_at) return;
+      REPLYING_TO = { id: row.id, name: quotedName(row), snippet: quotedSnippet(row) };
+      renderReplyBar();
+      var input = document.getElementById('kmsg-input'); if (input) input.focus();
+      refreshSendUI();
+    }
+    function cancelReply(){ REPLYING_TO = null; renderReplyBar(); refreshSendUI(); }
+    function renderReplyBar(){
+      var bar = document.getElementById('kmsg-reply-bar');
+      if (!bar) return;
+      if (!REPLYING_TO){ bar.style.display = 'none'; bar.innerHTML = ''; return; }
+      bar.style.display = 'flex';
+      bar.innerHTML =
+        '<i class="fa-solid fa-reply" style="color:var(--gd);flex-shrink:0;"></i>' +
+        '<div style="flex:1;min-width:0;">' +
+          '<div style="font-size:.6875rem;font-weight:700;color:var(--gd);">Replying to <span id="kmsg-reply-name"></span></div>' +
+          '<div id="kmsg-reply-snip" style="font-size:.6875rem;color:var(--tm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>' +
+        '</div>' +
+        '<button type="button" id="kmsg-reply-x" title="Cancel reply" aria-label="Cancel reply" style="width:1.75rem;height:1.75rem;border:none;border-radius:50%;background:rgba(255,255,255,.6);color:var(--tm);cursor:pointer;flex-shrink:0;"><i class="fa-solid fa-xmark"></i></button>';
+      bar.querySelector('#kmsg-reply-name').textContent = REPLYING_TO.name;   // textContent — safe
+      bar.querySelector('#kmsg-reply-snip').textContent = REPLYING_TO.snippet; // textContent — safe
+      var x = bar.querySelector('#kmsg-reply-x'); if (x) x.addEventListener('click', cancelReply);
+    }
+
+    // ── Context-menu shell (reusable; D2–D4 extend buildMenuItems) ────────────
+    // Per-message anchored popover. Items are provided per-message via a list of
+    // { label, icon, show, danger, onClick } so later phases add entries here.
+    function buildMenuItems(row){
+      var uid = currentUid();
+      return [
+        { label:'Reply', icon:'fa-reply', show:true, onClick:function(){ startReply(row); } },
+        { label:'Delete', icon:'fa-trash-can', danger:true,
+          show: row.sender_id === uid && !row.deleted_at,
+          onClick:function(){ confirmDeleteInMenu(row); } }
+      ];
+    }
+    function ensureCtxMenu(){
+      var el = document.getElementById('kmsg-ctx');
+      if (el) return el;
+      el = document.createElement('div');
+      el.id = 'kmsg-ctx';
+      el.setAttribute('role', 'menu');
+      document.body.appendChild(el);
+      return el;
+    }
+    function closeMsgMenu(){
+      var el = document.getElementById('kmsg-ctx');
+      if (el) el.classList.remove('show');
+    }
+    function positionMenu(el, x, y){
+      el.style.left = '0px'; el.style.top = '0px';   // measure at origin first
+      var r = el.getBoundingClientRect();
+      var vw = window.innerWidth, vh = window.innerHeight;
+      var nx = Math.max(8, Math.min(x, vw - r.width - 8));
+      var ny = Math.max(8, Math.min(y, vh - r.height - 8));
+      el.style.left = nx + 'px'; el.style.top = ny + 'px';
+    }
+    function openMsgMenu(mid, x, y){
+      var row = msgById(mid);
+      if (!row || row.__pending || row.__failed || row.deleted_at) return;
+      var el = ensureCtxMenu();
+      el.innerHTML = '';
+      buildMenuItems(row).forEach(function(it){
+        if (!it.show) return;
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'kmsg-ctx-item' + (it.danger ? ' danger' : '');
+        b.innerHTML = '<i class="fa-solid ' + it.icon + '"></i>';
+        var span = document.createElement('span'); span.textContent = it.label; // textContent — safe
+        b.appendChild(span);
+        b.addEventListener('click', function(){ closeMsgMenu(); it.onClick(); });
+        el.appendChild(b);
+      });
+      if (!el.children.length) return;
+      el.classList.add('show');
+      positionMenu(el, x, y);
+    }
+    // In-popover delete confirm (chosen over a cross-IIFE modal).
+    function confirmDeleteInMenu(row){
+      var el = ensureCtxMenu();
+      el.innerHTML = '';
+      var wrap = document.createElement('div'); wrap.className = 'kmsg-ctx-confirm';
+      var q = document.createElement('div'); q.className = 'kmsg-ctx-confirm-q'; q.textContent = 'Delete this message?';
+      var rowEl = document.createElement('div'); rowEl.className = 'kmsg-ctx-confirm-row';
+      var cancel = document.createElement('button'); cancel.className = 'kmsg-ctx-btn'; cancel.textContent = 'Cancel';
+      var del = document.createElement('button'); del.className = 'kmsg-ctx-btn danger'; del.textContent = 'Delete';
+      cancel.addEventListener('click', closeMsgMenu);
+      del.addEventListener('click', function(){ closeMsgMenu(); deleteMessage(row); });
+      rowEl.appendChild(cancel); rowEl.appendChild(del);
+      wrap.appendChild(q); wrap.appendChild(rowEl);
+      el.appendChild(wrap);
+      el.classList.add('show');
+    }
+    // Soft-delete: optimistic tombstone + direct UPDATE (RLS = sender only).
+    async function deleteMessage(row){
+      if (!row || row.deleted_at) return;
+      var prev = row.deleted_at || null;
+      row.deleted_at = new Date().toISOString();
+      if (CURRENT_CONV_ID) renderMessages(CURRENT_CONV_ID);
+      var res = await window.sb.from('messages').update({ deleted_at: row.deleted_at }).eq('id', row.id);
+      if (res.error){
+        console.warn('[k-messages] delete', res.error);
+        row.deleted_at = prev;                       // rollback
+        if (CURRENT_CONV_ID) renderMessages(CURRENT_CONV_ID);
+        if (window.__konekToast) window.__konekToast('Could not delete the message. Please try again.', true);
+        return;
+      }
+      // Keep the sidebar preview honest if this was the latest message.
+      var rows = MESSAGES_BY_CONV[row.conversation_id] || [];
+      var conv = CONVERSATIONS.find(function(c){ return c.id === row.conversation_id; });
+      if (conv && rows.length && rows[rows.length - 1].id === row.id){
+        conv.last_message_preview = 'This message was deleted';
+        renderConvList();
+      }
+    }
+
+    // Bind the context-menu triggers once (delegated on #kmsg-body): right-click
+    // + long-press → resolve nearest [data-mid] → openMsgMenu.
+    function wireMsgMenu(){
+      var body = document.getElementById('kmsg-body');
+      if (!body || body.__ctxWired) return;
+      body.__ctxWired = true;
+      ensureCtxMenu();
+      function midFrom(target){ var el = target && target.closest ? target.closest('[data-mid]') : null; return el && el.dataset.mid; }
+      body.addEventListener('contextmenu', function(ev){
+        var mid = midFrom(ev.target);
+        if (!mid) return;
+        ev.preventDefault();
+        openMsgMenu(mid, ev.clientX, ev.clientY);
+      });
+      // Long-press (mobile).
+      var lpTimer = null, lpMid = null;
+      body.addEventListener('touchstart', function(ev){
+        var t = ev.touches && ev.touches[0]; if (!t) return;
+        var mid = midFrom(ev.target); if (!mid) return;
+        lpMid = mid;
+        lpTimer = setTimeout(function(){ openMsgMenu(lpMid, t.clientX, t.clientY); lpTimer = null; }, 500);
+      }, { passive: true });
+      function cancelLp(){ if (lpTimer){ clearTimeout(lpTimer); lpTimer = null; } }
+      body.addEventListener('touchmove', cancelLp, { passive: true });
+      body.addEventListener('touchend', cancelLp);
+      body.addEventListener('scroll', closeMsgMenu, { passive: true });
+      // Close on outside-click / Esc (registered once at document level).
+      if (!window.__kmsgCtxGlobal){
+        window.__kmsgCtxGlobal = true;
+        document.addEventListener('mousedown', function(ev){
+          var el = document.getElementById('kmsg-ctx');
+          if (el && el.classList.contains('show') && !el.contains(ev.target)) closeMsgMenu();
+        });
+        document.addEventListener('keydown', function(ev){
+          if ((ev.key === 'Escape' || ev.key === 'Esc')) closeMsgMenu();
+        });
+      }
+    }
+
     // ---- Phase 5 helpers: in-thread search + property shortcut ---------------
 
     // Escape text, then wrap case-insensitive matches of q in <mark>. Segment
@@ -9361,6 +9611,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (!uid){ console.warn('[k-messages] submit: not signed in'); return; }
 
       var staged = STAGED;          // capture the single staged attachment
+      var replyTo = REPLYING_TO;    // D1 — capture the reply target (if any)
       var convAtSend = CURRENT_CONV_ID;
       sending = true;
       input.disabled = true;
@@ -9373,6 +9624,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       var optimistic = {
         id: tempId, conversation_id: convAtSend, sender_id: uid,
         body: body || null, attachment_listing_id: null,
+        reply_to_message_id: replyTo ? replyTo.id : null,
         created_at: new Date().toISOString(), __pending: true
       };
       if (staged){
@@ -9418,6 +9670,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       }
 
       var payload = { conversation_id: convAtSend, sender_id: uid, body: body || null };
+      if (replyTo) payload.reply_to_message_id = replyTo.id;
       if (staged){
         payload.attachment_type = staged.type;
         payload.attachment_path = attachPath;
@@ -9451,6 +9704,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       // server row renders via signed URL now).
       if (staged && staged.objectUrl){ try { URL.revokeObjectURL(staged.objectUrl); } catch(e){} }
       STAGED = null; renderStagedChip();
+      REPLYING_TO = null; renderReplyBar();   // D1 — clear reply state on success (kept on failure)
       refreshSendUI(); // cleared input → back to disabled look
       repaint();
 
@@ -9617,8 +9871,10 @@ document.addEventListener('DOMContentLoaded', async function() {
         .subscribe();
     }
 
-    // The recipient set delivered_at/read_at on one of MY messages — reflect the
-    // new Sent → Delivered → Seen status live without a reload.
+    // Live UPDATEs on a cached message. Generic column-merge so receipts
+    // (read_at/delivered_at) and D1 soft-delete (deleted_at) all propagate; D3/D4
+    // extend MERGE_FIELDS with pinned_at / body / edited_at without restructuring.
+    var MERGE_FIELDS = ['read_at', 'delivered_at', 'deleted_at'];
     function onRealtimeMessageUpdate(m){
       if (!m || !m.conversation_id) return;
       var rows = MESSAGES_BY_CONV[m.conversation_id];
@@ -9626,9 +9882,18 @@ document.addEventListener('DOMContentLoaded', async function() {
       var row = rows.find(function(r){ return r.id === m.id; });
       if (!row) return;
       var changed = false;
-      if (m.read_at && m.read_at !== row.read_at){ row.read_at = m.read_at; changed = true; }
-      if (m.delivered_at && m.delivered_at !== row.delivered_at){ row.delivered_at = m.delivered_at; changed = true; }
-      if (changed && m.conversation_id === CURRENT_CONV_ID) renderMessages(CURRENT_CONV_ID);
+      MERGE_FIELDS.forEach(function(f){ if (m[f] !== row[f]){ row[f] = m[f]; changed = true; } });
+      if (!changed) return;
+      // If a soft-deleted message was the conversation's latest, keep the sidebar
+      // preview honest (the other side sees "This message was deleted").
+      if (row.deleted_at){
+        var conv = CONVERSATIONS.find(function(c){ return c.id === m.conversation_id; });
+        if (conv && rows.length && rows[rows.length - 1].id === row.id){
+          conv.last_message_preview = 'This message was deleted';
+          renderConvList();
+        }
+      }
+      if (m.conversation_id === CURRENT_CONV_ID) renderMessages(CURRENT_CONV_ID);
     }
 
     function onRealtimeMessage(m){

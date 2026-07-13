@@ -12669,6 +12669,19 @@ document.addEventListener('DOMContentLoaded', async function() {
       '.kmd-tabs{display:flex;gap:.25rem;background:rgba(234,245,238,.5);border-radius:10px;padding:.1875rem;margin-bottom:.625rem;}',
       '.kmd-tab{flex:1;border:none;background:transparent;font:600 12px Inter,sans-serif;color:var(--ts);padding:.4375rem .375rem;border-radius:8px;cursor:pointer;}',
       '.kmd-tab.active{background:#fff;color:var(--gd);box-shadow:var(--sh);}',
+      // Phase C — Shared Media panes (Photos grid / Files list / Links list).
+      '.kmd-media-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.375rem;}',
+      '.kmd-media-thumb{position:relative;width:100%;padding-top:100%;border-radius:8px;overflow:hidden;background:rgba(0,0,0,.06);cursor:pointer;}',
+      '.kmd-media-thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}',
+      '.kmd-media-thumb.unavail{display:flex;align-items:center;justify-content:center;cursor:default;color:var(--tl);}',
+      '.kmd-media-thumb.unavail i{position:static;font-size:1.125rem;}',
+      '.kmd-file{display:flex;gap:.625rem;align-items:center;padding:.5rem;border-radius:10px;border:1px solid rgba(210,224,215,.5);background:rgba(255,255,255,.6);margin-bottom:.5rem;cursor:pointer;transition:background .15s ease;}',
+      '.kmd-file:hover{background:rgba(234,245,238,.7);}',
+      '.kmd-file-ic{width:2.25rem;height:2.25rem;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;background:rgba(46,122,70,.1);color:var(--gd);flex-shrink:0;}',
+      '.kmd-file-name{font-size:.75rem;font-weight:700;color:var(--td);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
+      '.kmd-file-size{font-size:.6875rem;color:var(--tl);margin-top:.0625rem;}',
+      '.kmd-link{display:block;padding:.4375rem .5rem;border-radius:8px;color:var(--gd);font-size:.75rem;word-break:break-all;text-decoration:none;}',
+      '.kmd-link:hover{background:rgba(234,245,238,.7);text-decoration:underline;}',
       '.kmd-empty{text-align:center;color:var(--tl);font-size:.75rem;padding:1.375rem .625rem;}',
       '.kmd-empty i{display:block;font-size:1.375rem;margin-bottom:.5rem;opacity:.6;}',
       '.kmd-row{display:flex;align-items:center;gap:.75rem;min-height:2.75rem;padding:.5rem .375rem;border-radius:10px;color:var(--tm);font-size:.8125rem;}',
@@ -12745,15 +12758,15 @@ document.addEventListener('DOMContentLoaded', async function() {
           // when the drawer opens (reuses the broker-listings query pattern).
           '<div class="kmd-label">Listings by this broker</div>' +
           '<div id="kmd-listings"><div class="kmd-empty" style="padding:1rem .625rem;">Loading…</div></div>' +
-          // Media — PLACEHOLDER (tabs switch active only; no data this phase)
-          '<div class="kmd-label">Media</div>' +
+          // Shared Media (Phase C) — REAL. Populated by fillMedia() from a
+          // dedicated drawer-side fetch of the conversation's attachment messages.
+          '<div class="kmd-label">Shared Media</div>' +
           '<div class="kmd-tabs" id="kmd-media-tabs">' +
             '<button class="kmd-tab active" type="button" data-tab="photos">Photos</button>' +
-            '<button class="kmd-tab" type="button" data-tab="videos">Videos</button>' +
             '<button class="kmd-tab" type="button" data-tab="files">Files</button>' +
             '<button class="kmd-tab" type="button" data-tab="links">Links</button>' +
           '</div>' +
-          '<div class="kmd-empty" id="kmd-media-empty"><i class="fa-regular fa-images"></i>No photos yet<div style="opacity:.8;margin-top:.125rem;">Coming soon</div></div>' +
+          '<div id="kmd-media-pane"><div class="kmd-empty" style="padding:1rem .625rem;">Loading…</div></div>' +
           // Chat Actions — PLACEHOLDER (no persistence yet)
           '<div class="kmd-label">Chat Actions</div>' +
           '<div id="kmd-actions"></div>' +
@@ -12774,16 +12787,15 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (typeof window.openBrokerProfile === 'function') window.openBrokerProfile();
         else if (typeof window.goTo === 'function') window.goTo('broker');
       });
-      // Media tabs — visual active-state only; each shows the same empty state.
+      // Shared Media tabs (Phase C) — switch the active tab, then render its pane
+      // from the cached fetch (renderMediaTab reads the CURRENT active conversation).
       var tabWrap = d.querySelector('#kmd-media-tabs');
-      var emptyEl = d.querySelector('#kmd-media-empty');
-      var EMPTY = { photos:['fa-regular fa-images','No photos yet'], videos:['fa-regular fa-circle-play','No videos yet'], files:['fa-regular fa-file','No files yet'], links:['fa-solid fa-link','No links yet'] };
       tabWrap.querySelectorAll('.kmd-tab').forEach(function(t){
         t.addEventListener('click', function(){
           tabWrap.querySelectorAll('.kmd-tab').forEach(function(x){ x.classList.remove('active'); });
           t.classList.add('active');
-          var e = EMPTY[t.getAttribute('data-tab')] || EMPTY.photos;
-          emptyEl.innerHTML = '<i class="' + e[0] + '"></i>' + e[1] + '<div style="opacity:.8;margin-top:.125rem;">Coming soon</div>';
+          mediaTab = t.getAttribute('data-tab') || 'photos';
+          renderMediaTab();
         });
       });
       // Chat Actions rows (disabled placeholders)
@@ -12852,6 +12864,152 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
     // Listings by this broker (#6). Cached per broker id so reopening the drawer
     // (or switching back to a conversation) doesn't re-hit the network.
+    // ─── Shared Media (Phase C) ───────────────────────────────────
+    // Drawer-side, self-contained: dedicated fetch of the conversation's
+    // attachment/link messages (does NOT read k-messages internals). Private
+    // 'message-attachments' bucket → signed URLs only (cache TTL < sign TTL).
+    var mediaCache = {};      // conversation_id → { images:[], files:[], links:[] }
+    var mediaSignCache = {};  // attachment_path → { url, exp(ms) }
+    var mediaTab = 'photos';
+    function mediaBytes(n){
+      n = Number(n) || 0;
+      if (n < 1024) return n + ' B';
+      if (n < 1048576) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' KB';
+      return (n / 1048576).toFixed(n < 10485760 ? 1 : 0) + ' MB';
+    }
+    function mediaFileIcon(mime, name){
+      var m = mime || '', ext = (name || '').split('.').pop().toLowerCase();
+      if (m === 'application/pdf' || ext === 'pdf') return 'fa-file-pdf';
+      if (m.indexOf('wordprocessingml') !== -1 || ext === 'docx' || ext === 'doc') return 'fa-file-word';
+      if (m.indexOf('spreadsheetml') !== -1 || ext === 'xlsx' || ext === 'xls') return 'fa-file-excel';
+      if (m.indexOf('image/') === 0) return 'fa-file-image';
+      return 'fa-file';
+    }
+    function mediaSignedUrl(path){
+      if (!path || !window.sb) return Promise.resolve(null);
+      var c = mediaSignCache[path];
+      if (c && c.exp > Date.now()) return Promise.resolve(c.url);
+      return window.sb.storage.from('message-attachments').createSignedUrl(path, 3600).then(function(r){
+        if (r && r.data && r.data.signedUrl){
+          mediaSignCache[path] = { url: r.data.signedUrl, exp: Date.now() + 55 * 60 * 1000 };
+          return r.data.signedUrl;
+        }
+        return null;
+      }).catch(function(){ return null; });
+    }
+    function mediaCachedUrl(path){
+      var c = path && mediaSignCache[path];
+      return (c && c.exp > Date.now()) ? c.url : null;
+    }
+
+    // Load the conversation's shared media (one query, split client-side). Mirrors
+    // fillOtherListings: cache-per-conversation + stale guard.
+    function fillMedia(c){
+      var pane = document.getElementById('kmd-media-pane');
+      var cid = c && c.id;
+      mediaTab = 'photos';
+      var tabs = document.querySelectorAll('#kmd-media-tabs .kmd-tab');
+      Array.prototype.forEach.call(tabs, function(x){ x.classList.toggle('active', x.getAttribute('data-tab') === 'photos'); });
+      if (!cid){ if (pane) pane.innerHTML = '<div class="kmd-empty" style="padding:1rem .625rem;">No conversation</div>'; return; }
+      if (mediaCache[cid]){ renderMediaTab(); return; }
+      if (pane) pane.innerHTML = '<div class="kmd-empty" style="padding:1rem .625rem;">Loading…</div>';
+      if (!window.sb){ mediaCache[cid] = { images:[], files:[], links:[] }; renderMediaTab(); return; }
+      window.sb.from('messages')
+        .select('id,attachment_type,attachment_path,file_name,file_size,mime_type,body,created_at')
+        .eq('conversation_id', cid)
+        .order('created_at', { ascending: false })   // newest-first for all panes
+        .then(function(res){
+          var rows = (res && res.data) || [];
+          var images = [], files = [], links = [], seen = {};
+          rows.forEach(function(m){
+            if (m.attachment_type === 'image' && m.attachment_path) images.push(m);
+            else if (m.attachment_type === 'file' && m.attachment_path) files.push(m);
+            if (m.body){
+              var found = m.body.match(/\bhttps?:\/\/[^\s]+/gi);
+              if (found) found.forEach(function(u){
+                u = u.replace(/[)\].,;!?]+$/, '');   // strip trailing punctuation
+                if (u && !seen[u]){ seen[u] = 1; links.push({ url: u, created_at: m.created_at }); }
+              });
+            }
+          });
+          mediaCache[cid] = { images: images, files: files, links: links };
+          // Stale guard: only paint if this is still the active conversation.
+          var cur = window.__kmsgActiveConv;
+          if (cur && cur.id === cid) renderMediaTab();
+        });
+    }
+
+    function renderMediaTab(){
+      var pane = document.getElementById('kmd-media-pane');
+      if (!pane) return;
+      var c = window.__kmsgActiveConv, cid = c && c.id;
+      var data = cid && mediaCache[cid];
+      if (!data){ pane.innerHTML = '<div class="kmd-empty" style="padding:1rem .625rem;">Loading…</div>'; return; }
+      if (mediaTab === 'files') return renderFilesPane(pane, data.files);
+      if (mediaTab === 'links') return renderLinksPane(pane, data.links);
+      return renderPhotosPane(pane, data.images);
+    }
+    function renderPhotosPane(pane, imgs){
+      pane.innerHTML = '';
+      if (!imgs.length){ pane.innerHTML = '<div class="kmd-empty" style="padding:1rem .625rem;">No photos shared yet.</div>'; return; }
+      var grid = document.createElement('div'); grid.className = 'kmd-media-grid';
+      imgs.forEach(function(m){
+        var tile = document.createElement('div'); tile.className = 'kmd-media-thumb';
+        var img = document.createElement('img'); img.alt = m.file_name || ''; img.loading = 'lazy';
+        tile.appendChild(img);
+        var cached = mediaCachedUrl(m.attachment_path);
+        if (cached){ img.src = cached; }
+        else {
+          mediaSignedUrl(m.attachment_path).then(function(url){
+            if (url){ img.src = url; }
+            else { tile.classList.add('unavail'); tile.innerHTML = '<i class="fa-regular fa-image"></i>'; }
+          });
+        }
+        tile.addEventListener('click', function(){
+          var u = mediaCachedUrl(m.attachment_path);
+          if (u){ if (window.openImageViewer) window.openImageViewer(u); return; }
+          mediaSignedUrl(m.attachment_path).then(function(url){ if (url && window.openImageViewer) window.openImageViewer(url); });
+        });
+        grid.appendChild(tile);
+      });
+      pane.appendChild(grid);
+    }
+    function renderFilesPane(pane, files){
+      pane.innerHTML = '';
+      if (!files.length){ pane.innerHTML = '<div class="kmd-empty" style="padding:1rem .625rem;">No files shared yet.</div>'; return; }
+      files.forEach(function(m){
+        var chip = document.createElement('div'); chip.className = 'kmd-file';
+        chip.innerHTML =
+          '<span class="kmd-file-ic"><i class="fa-solid ' + mediaFileIcon(m.mime_type, m.file_name) + '"></i></span>' +
+          '<div style="flex:1;min-width:0;"><div class="kmd-file-name"></div><div class="kmd-file-size"></div></div>' +
+          '<i class="fa-solid fa-download" style="color:var(--tm);flex-shrink:0;"></i>';
+        chip.querySelector('.kmd-file-name').textContent = m.file_name || 'Attachment'; // textContent — safe
+        chip.querySelector('.kmd-file-size').textContent = mediaBytes(m.file_size);
+        chip.addEventListener('click', function(){
+          mediaSignedUrl(m.attachment_path).then(function(url){
+            if (url) window.open(url, '_blank', 'noopener');
+            else if (window.__konekToast) window.__konekToast('Attachment unavailable.', true);
+          });
+        });
+        pane.appendChild(chip);
+      });
+    }
+    function renderLinksPane(pane, links){
+      pane.innerHTML = '';
+      if (!links.length){ pane.innerHTML = '<div class="kmd-empty" style="padding:1rem .625rem;">No links shared yet.</div>'; return; }
+      links.forEach(function(l){
+        // XSS-safe: build the anchor node-by-node; the URL only ever touches
+        // textContent + href (regex already guaranteed an http(s) scheme).
+        var a = document.createElement('a');
+        a.className = 'kmd-link';
+        a.textContent = l.url;
+        a.href = l.url;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        pane.appendChild(a);
+      });
+    }
+
     var otherListingsCache = {};
     function fillOtherListings(c){
       var host = document.getElementById('kmd-listings');
@@ -12917,6 +13075,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       buildDrawer();
       fillInfo(window.__kmsgActiveConv);
       fillOtherListings(window.__kmsgActiveConv);
+      fillMedia(window.__kmsgActiveConv);
       var d = document.getElementById('kmsg-drawer');
       var s = document.getElementById('kmsg-drawer-scrim');
       if (s) s.classList.add('show');

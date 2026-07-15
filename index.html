@@ -13316,15 +13316,30 @@ document.addEventListener('DOMContentLoaded', async function() {
           renderMediaTab();
         });
       });
-      // Chat Actions rows (disabled placeholders)
+      // Chat Actions rows. E1 — Mute is REAL (toggles conversation_states.is_muted,
+      // which the notify_message_recipient trigger honours to skip the bell). The
+      // former Notifications + Sounds placeholders are removed: no push channel
+      // exists separate from the bell Mute governs, and no audio playback exists.
       var acts = d.querySelector('#kmd-actions');
-      acts.appendChild(row('fa-bell-slash', 'Mute', { title:'Coming soon' }));
-      acts.appendChild(row('fa-bell', 'Notifications', { title:'Coming soon' }));
-      acts.appendChild(row('fa-volume-high', 'Sounds', { title:'Coming soon' }));
-      // Privacy & Support rows (disabled placeholders; Report-User needs its own
-      // schema — cannot reuse listing_reports, which is listing-scoped)
+      var muteRow = document.createElement('div');
+      muteRow.className = 'kmd-row enabled';
+      muteRow.id = 'kmd-mute-row';
+      muteRow.innerHTML =
+        '<span class="kmd-row-ic"><i class="fa-solid fa-bell-slash"></i></span>' +
+        '<span class="kmd-row-lbl">Mute</span>' +
+        '<span class="kmd-mute-sw" id="kmd-mute-sw" role="switch" aria-checked="false" aria-label="Mute chat"></span>';
+      muteRow.addEventListener('click', function(){ toggleMute(window.__kmsgActiveConv); });
+      acts.appendChild(muteRow);
+      setMuteUI(false);   // default until fillMute() reads the real state on open
+      // Privacy & Support rows. E2 — Report User is REAL: opens a confidential
+      // report dialog that inserts into user_reports. The reported user is NEVER
+      // notified (no notify-broker, no notifications row; admin-only via RLS).
       var priv = d.querySelector('#kmd-privacy');
-      priv.appendChild(row('fa-flag', 'Report User', { title:'Coming soon' }));
+      priv.appendChild(row('fa-flag', 'Report User', { enabled:true, onClick: function(){
+        var c = window.__kmsgActiveConv;
+        closeChatDrawer();
+        openUserReport(c);
+      } }));
       // Help (#16) — enabled; routes to the existing #page-help (no duplicated
       // help content). Close the drawer first, then navigate.
       priv.appendChild(row('fa-circle-question', 'Help', { enabled:true, onClick: function(){
@@ -13652,12 +13667,164 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (c && c.id === cid && drawer && drawer.classList.contains('open')) fillPins(c);
     };
 
+    // E1 — Mute chat (per-conversation, simple on/off on conversation_states.is_muted).
+    // The switch reflects state; the DB trigger notify_message_recipient reads is_muted
+    // to skip the recipient's bell notification. State cached per conversation.
+    var muteState = {};
+    function setMuteUI(muted){
+      var sw = document.getElementById('kmd-mute-sw');
+      if (!sw) return;
+      sw.setAttribute('aria-checked', muted ? 'true' : 'false');
+      sw.style.cssText = 'position:relative;margin-left:auto;width:2.25rem;height:1.25rem;border-radius:999px;flex-shrink:0;transition:background .15s;background:' +
+        (muted ? 'var(--gd)' : 'rgba(120,130,125,.35)') + ';';
+      sw.innerHTML = '<span style="position:absolute;top:2px;' + (muted ? 'right:2px' : 'left:2px') +
+        ';width:1rem;height:1rem;border-radius:50%;background:#fff;transition:all .15s;box-shadow:0 1px 2px rgba(0,0,0,.2);"></span>';
+    }
+    function fillMute(c){
+      var cid = c && c.id;
+      var uid = window.__currentUser && window.__currentUser.id;
+      if (!cid || !uid){ setMuteUI(false); return; }
+      if (cid in muteState){ setMuteUI(muteState[cid]); return; }   // cached
+      setMuteUI(false);   // optimistic default while the single-row read is in flight
+      if (!window.sb){ return; }
+      window.sb.from('conversation_states')
+        .select('is_muted').eq('user_id', uid).eq('conversation_id', cid).maybeSingle()
+        .then(function(res){
+          var muted = !!(res && res.data && res.data.is_muted);   // missing row = unmuted
+          muteState[cid] = muted;
+          var cur = window.__kmsgActiveConv;                       // stale guard
+          if (cur && cur.id === cid) setMuteUI(muted);
+        });
+    }
+    async function toggleMute(c){
+      var cid = c && c.id;
+      var uid = window.__currentUser && window.__currentUser.id;
+      if (!cid || !uid) return;
+      var prev = !!muteState[cid], next = !prev;
+      muteState[cid] = next; setMuteUI(next);                      // optimistic
+      // Upsert ONLY is_muted (mirrors the last_read_at upsert): ON CONFLICT DO UPDATE
+      // touches just this column, so last_read_at / is_pinned / etc. are never clobbered.
+      var res = await window.sb.from('conversation_states').upsert(
+        { user_id: uid, conversation_id: cid, is_muted: next },
+        { onConflict: 'user_id,conversation_id' });
+      if (res.error){
+        console.warn('[k-chat-drawer] mute', res.error);
+        muteState[cid] = prev; setMuteUI(prev);                   // rollback
+        if (window.__konekToast) window.__konekToast('Could not update mute. Please try again.', true);
+        return;
+      }
+      if (window.__konekToast) window.__konekToast(next ? 'Chat muted' : 'Chat unmuted');
+    }
+
+    // ── E2 — Report User (confidential; inserts into user_reports) ─────────────
+    // HARD CONSTRAINT: the submit path does ONLY the insert — NO notify-broker,
+    // NO notifications row, no broker-side trace. The reported user is never told.
+    // Stable reason keys; labels rendered here. XSS-safe: the overlay skeleton is
+    // static innerHTML; user input (reason value + note) only ever flows into the
+    // parameterized insert, never into markup.
+    var UR_REASONS = [
+      ['spam','Spam'], ['harassment','Harassment'], ['fraud','Fraud'],
+      ['fake_listing','Fake Listing'], ['inappropriate','Inappropriate Behavior'],
+      ['scam','Scam'], ['other','Other']
+    ];
+    var URTARGET = null;   // { reported, conv } captured when the dialog opens
+    function urShowModal(id){ if (typeof window.showModal === 'function'){ window.showModal(id); return; } var el = document.getElementById(id); if (el) el.classList.add('show'); }
+    function urCloseModal(id){ if (typeof window.closeModal === 'function'){ window.closeModal(id); return; } var el = document.getElementById(id); if (el) el.classList.remove('show'); }
+    function ensureUserReportOverlay(){
+      if (document.getElementById('overlay-report-user') || !document.body) return;
+      var ov = document.createElement('div');
+      ov.className = 'overlay'; ov.id = 'overlay-report-user';
+      var opts = UR_REASONS.map(function(r){ return '<option value="' + r[0] + '">' + r[1] + '</option>'; }).join('');
+      ov.innerHTML =
+        '<div class="modal" style="max-width:27.5rem;padding:2rem;">' +
+        '  <div style="text-align:center;margin-bottom:1.125rem;">' +
+        '    <div style="font-size:2.625rem;color:var(--gd,#2a7a3d);margin-bottom:.625rem;"><i class="fa-solid fa-flag"></i></div>' +
+        '    <h3 style="margin:0 0 .375rem;font-size:1.25rem;">Report this user</h3>' +
+        '    <p style="margin:0;color:var(--tm,#4a5a4a);line-height:1.5;font-size:.8125rem;">Reports are confidential and reviewed by our moderation team. The other person is not notified.</p>' +
+        '  </div>' +
+        '  <label style="display:block;font-size:.75rem;color:var(--tm,#4a5a4a);margin-bottom:.3125rem;">Reason</label>' +
+        '  <select id="ur-reason" style="width:100%;padding:.6875rem .75rem;font-size:.875rem;border:2px solid var(--br,#d4dcd4);border-radius:10px;font-family:inherit;outline:none;box-sizing:border-box;margin-bottom:.75rem;background:#fff;">' + opts + '</select>' +
+        '  <label id="ur-note-label" style="display:block;font-size:.75rem;color:var(--tm,#4a5a4a);margin-bottom:.3125rem;">Details (optional)</label>' +
+        '  <textarea id="ur-note" rows="3" placeholder="Add anything that helps us review this…" style="width:100%;padding:.6875rem .75rem;font-size:.875rem;border:2px solid var(--br,#d4dcd4);border-radius:10px;font-family:inherit;outline:none;box-sizing:border-box;resize:vertical;margin-bottom:.5rem;"></textarea>' +
+        '  <div id="ur-error" style="color:#c44;font-size:.8125rem;min-height:1.125rem;margin-bottom:.5rem;"></div>' +
+        '  <button id="ur-submit" style="width:100%;padding:.8125rem;background:var(--gd,#2a7a3d);color:#fff;border:0;border-radius:10px;cursor:pointer;font-weight:600;font-family:inherit;font-size:.875rem;margin-bottom:.5rem;">Submit Report</button>' +
+        '  <button id="ur-cancel" style="width:100%;padding:.6875rem;background:none;color:var(--tm,#4a5a4a);border:1px solid var(--br,#d4dcd4);border-radius:10px;cursor:pointer;font-family:inherit;font-size:.8125rem;">Cancel</button>' +
+        '</div>';
+      document.body.appendChild(ov);
+
+      var reasonEl = ov.querySelector('#ur-reason');
+      var noteLbl  = ov.querySelector('#ur-note-label');
+      var noteEl   = ov.querySelector('#ur-note');
+      var errEl    = ov.querySelector('#ur-error');
+      var btnS     = ov.querySelector('#ur-submit');
+      var btnC     = ov.querySelector('#ur-cancel');
+
+      // "Other" makes the details field required; every other reason keeps it optional.
+      reasonEl.addEventListener('change', function(){
+        if (reasonEl.value === 'other'){
+          noteLbl.textContent = 'Please describe what happened.';
+          noteEl.placeholder = 'Please describe what happened.';
+        } else {
+          noteLbl.textContent = 'Details (optional)';
+          noteEl.placeholder = 'Add anything that helps us review this…';
+        }
+      });
+      btnC.addEventListener('click', function(){ urCloseModal('overlay-report-user'); });
+
+      btnS.addEventListener('click', async function(){
+        errEl.textContent = '';
+        var u = window.__currentUser;
+        if (!URTARGET || !URTARGET.reported){ errEl.textContent = 'Something went wrong — please reopen the chat.'; return; }
+        if (!u || !u.id || !window.sb){ errEl.textContent = 'Please sign in again to report.'; return; }
+        var reason = reasonEl.value || 'other';
+        var note = (noteEl.value || '').trim();
+        if (reason === 'other' && !note){ errEl.textContent = 'Please describe what happened.'; return; }
+        btnS.disabled = true; btnS.textContent = 'Submitting…';
+        try {
+          // ONLY the insert. No notify-broker, no notifications — see HARD CONSTRAINT above.
+          var ins = await window.sb.from('user_reports').insert({
+            reporter_id: u.id,
+            reported_user_id: URTARGET.reported,
+            conversation_id: URTARGET.conv || null,
+            reason: reason,
+            description: note || null
+          });
+          btnS.disabled = false; btnS.textContent = 'Submit Report';
+          if (ins.error){
+            if (ins.error.code === '23505'){   // partial unique: an open report already exists
+              urCloseModal('overlay-report-user');
+              if (window.__konekToast) window.__konekToast('You’ve already reported this user.');
+              return;
+            }
+            errEl.textContent = ins.error.message || 'Could not submit report.';
+            return;
+          }
+          urCloseModal('overlay-report-user');
+          if (window.__konekToast) window.__konekToast('Thank you. Your report has been submitted to our moderation team.');
+        } catch(e){
+          btnS.disabled = false; btnS.textContent = 'Submit Report';
+          errEl.textContent = (e && e.message) || 'Could not submit report.';
+        }
+      });
+    }
+    function openUserReport(c){
+      ensureUserReportOverlay();
+      URTARGET = { reported: c && c.other_id, conv: c && c.id };
+      var ov = document.getElementById('overlay-report-user'); if (!ov) return;
+      var r = ov.querySelector('#ur-reason'); if (r) r.selectedIndex = 0;
+      var lbl = ov.querySelector('#ur-note-label'); if (lbl) lbl.textContent = 'Details (optional)';
+      var n = ov.querySelector('#ur-note'); if (n){ n.value = ''; n.placeholder = 'Add anything that helps us review this…'; }
+      var e = ov.querySelector('#ur-error'); if (e) e.textContent = '';
+      urShowModal('overlay-report-user');
+    }
+
     function openChatDrawer(){
       buildDrawer();
       fillInfo(window.__kmsgActiveConv);
       fillOtherListings(window.__kmsgActiveConv);
       fillMedia(window.__kmsgActiveConv);
       fillPins(window.__kmsgActiveConv);
+      fillMute(window.__kmsgActiveConv);
       var d = document.getElementById('kmsg-drawer');
       var s = document.getElementById('kmsg-drawer-scrim');
       if (s) s.classList.add('show');

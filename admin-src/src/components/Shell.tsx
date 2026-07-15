@@ -13,6 +13,7 @@ const NAV = [
   { to: '/listings', icon: 'fa-clipboard-check', label: 'Listing Approvals' },
   { to: '/manage-listings', icon: 'fa-list-check', label: 'Manage Listings' },
   { to: '/reports', icon: 'fa-flag', label: 'Reports' },
+  { to: '/user-reports', icon: 'fa-user-shield', label: 'User Reports' },
   { to: '/support', icon: 'fa-life-ring', label: 'Support Tickets' },
   { to: '/articles', icon: 'fa-newspaper', label: 'Articles' },
   { to: '/promotions', icon: 'fa-bullhorn', label: 'Promotions' },

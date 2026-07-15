@@ -15,6 +15,7 @@ const AdminArticles    = lazy(() => import('./pages/AdminArticles'));
 const AdminPromotions  = lazy(() => import('./pages/AdminPromotions'));
 const AdminUsers       = lazy(() => import('./pages/AdminUsers'));
 const SupportTickets   = lazy(() => import('./pages/SupportTickets'));
+const UserReports      = lazy(() => import('./pages/UserReports'));
 
 function PageFallback() {
   return <div className="card"><p className="muted">Loading…</p></div>;
@@ -156,6 +157,7 @@ export default function App() {
           <Route path="/listings" element={<ListingApprovals />} />
           <Route path="/manage-listings" element={<ManageListings />} />
           <Route path="/reports" element={<Reports />} />
+          <Route path="/user-reports" element={<UserReports />} />
           <Route path="/articles" element={<AdminArticles />} />
           <Route path="/promotions" element={<AdminPromotions />} />
           <Route path="/users" element={<AdminUsers />} />

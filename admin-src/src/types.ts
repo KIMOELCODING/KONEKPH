@@ -85,6 +85,23 @@ export interface SupportTicket {
   profiles?: { first_name: string; last_name: string; email: string | null } | null;
 }
 
+export type UserReportReason =
+  | 'spam' | 'harassment' | 'fraud' | 'fake_listing' | 'inappropriate' | 'scam' | 'other';
+
+export interface UserReport {
+  id: string;
+  reporter_id: string;
+  reported_user_id: string;
+  conversation_id: string | null;
+  reason: UserReportReason;
+  description: string | null;
+  status: 'pending' | 'resolved' | 'dismissed';
+  created_at: string;
+  // Aliased to-one FK embeds (supabase-js types them as arrays; runtime = object).
+  reporter?: { first_name: string; last_name: string; email: string | null } | null;
+  reported?: { first_name: string; last_name: string; email: string | null } | null;
+}
+
 export interface PromotedSlide {
   id: string;
   title: string;

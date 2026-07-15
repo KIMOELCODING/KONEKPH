@@ -8684,6 +8684,8 @@ document.addEventListener('DOMContentLoaded', async function() {
           '</div>' +
           // Phase D1 — reply-preview bar (hidden until "Reply" is chosen).
           '<div id="kmsg-reply-bar" style="display:none;align-items:center;gap:.5rem;padding:.5rem .625rem;margin-bottom:.5rem;border-left:3px solid var(--gd);border-radius:8px;background:rgba(234,245,238,.6);"></div>' +
+          // Phase D4 — edit bar (hidden until "Edit" is chosen; mutually exclusive with reply).
+          '<div id="kmsg-edit-bar" style="display:none;align-items:center;gap:.5rem;padding:.5rem .625rem;margin-bottom:.5rem;border-left:3px solid var(--gd);border-radius:8px;background:rgba(234,245,238,.6);"></div>' +
           // Phase B2 — staged attachment preview (hidden until a file is picked).
           '<div id="kmsg-staged" style="display:none;align-items:center;gap:.5rem;padding:.5rem;margin-bottom:.5rem;border:1px solid rgba(210,224,215,.6);border-radius:10px;background:rgba(255,255,255,.6);"></div>' +
           '<form id="kmsg-form" style="display:flex;gap:.5rem;align-items:flex-end;">' +
@@ -8717,6 +8719,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       var chipsToggle = overlay.querySelector('#kmsg-chips-toggle');
       if (chipsToggle) chipsToggle.addEventListener('click', reopenChips);
       input.addEventListener('keydown', function(ev){
+        if (ev.key === 'Escape' && EDITING){ ev.preventDefault(); cancelEdit(); return; }  // D4 — Esc cancels edit
         if (ev.key === 'Enter' && !ev.shiftKey){ ev.preventDefault(); submitMessage(); }
         // auto-grow
         input.style.height = 'auto';
@@ -8838,6 +8841,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
 
     async function openConversation(convId){
+      if (EDITING) cancelEdit();   // D4 — don't carry an edit-in-progress into another thread
       CURRENT_CONV_ID = convId;
       flushRevokes(); // drop any failed-bubble blob URLs from the previous thread
       isNearBottom = true; hasNewHint = false; // fresh thread opens pinned to bottom
@@ -9054,7 +9058,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (btn){
         btn.classList.toggle('is-sending', !!sending);
         btn.classList.toggle('is-off', !sending && !sendable);
-        btn.innerHTML = sending ? '<span class="kmsg-send-spin"></span> Sending' : 'Send';
+        btn.innerHTML = sending ? '<span class="kmsg-send-spin"></span> Sending' : (EDITING ? 'Save' : 'Send');
       }
       if (counter){
         counter.textContent = len + '/' + MAX_MSG_LEN;
@@ -9301,11 +9305,28 @@ document.addEventListener('DOMContentLoaded', async function() {
         bubble.appendChild(text);
       }
 
+      // D3 — subtle pin indicator above the bubble (non-deleted only; deleted
+      // messages tombstone-early-return above so they never show a pin).
+      if (m.pinned_at){
+        var pinFlag = document.createElement('div');
+        pinFlag.textContent = '📌 Pinned';
+        pinFlag.style.cssText = 'font-size:.625rem;color:var(--tl);margin-bottom:.1875rem;padding:0 .25rem;';
+        wrap.appendChild(pinFlag);
+      }
+
       wrap.appendChild(bubble);
 
       // D2 — reaction bar below the bubble (non-deleted messages only; deleted
       // messages tombstone-early-return above, so they never reach here).
       renderReactionBar(wrap, m, mine);
+
+      // D4 — subtle "· edited" marker (any edited, non-deleted message).
+      if (m.edited_at){
+        var ed = document.createElement('div');
+        ed.textContent = '· edited';
+        ed.style.cssText = 'font-size:.625rem;color:var(--tl);margin-top:.125rem;padding:0 .25rem;';
+        wrap.appendChild(ed);
+      }
 
       // Delivery status — only on my own last message of a cluster.
       if (mine && opts.lastOfCluster){
@@ -9398,6 +9419,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     // ═══ Phase D1 — message actions (reply + delete) ══════════════════════════
     var REPLYING_TO = null;   // { id, name, snippet } when composing a reply
+    var EDITING = null;       // D4 — { id, prevInput, prevStaged, prevReplying } while editing a message
 
     function msgById(mid){
       var rows = MESSAGES_BY_CONV[CURRENT_CONV_ID] || [];
@@ -9474,6 +9496,88 @@ document.addEventListener('DOMContentLoaded', async function() {
       var x = bar.querySelector('#kmsg-reply-x'); if (x) x.addEventListener('click', cancelReply);
     }
 
+    // ── D4 — Edit message (composer edit, mutually exclusive with reply/staged) ──
+    // Enter edit mode: snapshot the composer (draft text, staged attachment, reply
+    // target), stash+clear reply/staged so the composer is a clean edit surface,
+    // load the message body into the input, and show the "Editing" bar. The edit
+    // is body-only — a file staged DURING an edit is discarded on save/cancel
+    // (the pre-edit staged attachment is what gets restored).
+    function startEdit(row){
+      if (!row || row.__pending || row.deleted_at || row.body == null) return;
+      var input = document.getElementById('kmsg-input');
+      if (!input) return;
+      EDITING = { id: row.id, prevInput: input.value || '', prevStaged: STAGED, prevReplying: REPLYING_TO };
+      REPLYING_TO = null; renderReplyBar();     // stash + clear reply
+      STAGED = null; renderStagedChip();        // stash + hide staged chip (objectURL preserved)
+      input.value = row.body;
+      renderEditBar();
+      input.focus();
+      input.style.height = 'auto'; input.style.height = Math.min(120, input.scrollHeight) + 'px';
+      refreshSendUI();
+    }
+    // Restore the composer to its pre-edit snapshot and leave edit mode.
+    function restoreComposerFromEdit(){
+      var input = document.getElementById('kmsg-input');
+      var snap = EDITING; EDITING = null;
+      if (input && snap){ input.value = snap.prevInput; input.style.height = 'auto'; input.style.height = Math.min(120, input.scrollHeight) + 'px'; }
+      if (snap){ STAGED = snap.prevStaged || null; REPLYING_TO = snap.prevReplying || null; }
+      renderStagedChip(); renderReplyBar(); renderEditBar();
+      refreshSendUI();
+    }
+    function cancelEdit(){ if (!EDITING) return; restoreComposerFromEdit(); }
+    function renderEditBar(){
+      var bar = document.getElementById('kmsg-edit-bar');
+      if (!bar) return;
+      if (!EDITING){ bar.style.display = 'none'; bar.innerHTML = ''; return; }
+      bar.style.display = 'flex';
+      bar.innerHTML =
+        '<i class="fa-solid fa-pen" style="color:var(--gd);flex-shrink:0;"></i>' +
+        '<div style="flex:1;min-width:0;font-size:.6875rem;font-weight:700;color:var(--gd);">Editing message</div>' +
+        '<button type="button" id="kmsg-edit-x" title="Cancel edit" aria-label="Cancel edit" style="width:1.75rem;height:1.75rem;border:none;border-radius:50%;background:rgba(255,255,255,.6);color:var(--tm);cursor:pointer;flex-shrink:0;"><i class="fa-solid fa-xmark"></i></button>';
+      var x = bar.querySelector('#kmsg-edit-x'); if (x) x.addEventListener('click', cancelEdit);
+    }
+    // Save an edit: same content rules as sending (off-platform + length), then
+    // optimistic body/edited_at update + edit_message RPC (rollback + toast on
+    // error, surfacing "Edit window expired" verbatim). Restores the composer
+    // snapshot on both success and error.
+    async function saveEdit(){
+      if (!EDITING) return;
+      var input = document.getElementById('kmsg-input');
+      if (!input) return;
+      var newBody = (input.value || '').trim();
+      if (!newBody){
+        if (window.__konekToast) window.__konekToast('An edited message can’t be empty. Use Delete to remove it.', true);
+        return;
+      }
+      if (__konekHasContactInfo(newBody)){
+        if (window.__konekToast) window.__konekToast("Keep it on ProList — phone numbers, landlines and email addresses can't be sent in chat.", true);
+        return;
+      }
+      if (newBody.length > MAX_MSG_LEN){
+        if (window.__konekToast) window.__konekToast('Message is too long — keep it under ' + MAX_MSG_LEN + ' characters.', true);
+        return;
+      }
+      var mid = EDITING.id;
+      var rows = MESSAGES_BY_CONV[CURRENT_CONV_ID] || [];
+      var row = rows.find(function(r){ return r.id === mid; });
+      if (!row){ restoreComposerFromEdit(); return; }
+      var prevBody = row.body, prevEdited = row.edited_at || null;
+      // Optimistic update, then leave edit mode + restore the pre-edit composer.
+      row.body = newBody; row.edited_at = new Date().toISOString();
+      restoreComposerFromEdit();
+      if (CURRENT_CONV_ID) renderMessages(CURRENT_CONV_ID);
+      var res = await window.sb.rpc('edit_message', { p_message_id: mid, p_body: newBody });
+      if (res.error){
+        console.warn('[k-messages] edit', res.error);
+        row.body = prevBody; row.edited_at = prevEdited;   // rollback
+        if (CURRENT_CONV_ID) renderMessages(CURRENT_CONV_ID);
+        var msg = /window expired/i.test(res.error.message || '')
+          ? 'The 30-minute edit window has passed — this message can no longer be edited.'
+          : 'Could not save the edit. Please try again.';
+        if (window.__konekToast) window.__konekToast(msg, true);
+      }
+    }
+
     // ── Context-menu shell (reusable; D2–D4 extend buildMenuItems) ────────────
     // Per-message anchored popover. Items are provided per-message via a list of
     // { label, icon, show, danger, onClick } so later phases add entries here.
@@ -9482,6 +9586,12 @@ document.addEventListener('DOMContentLoaded', async function() {
       return [
         { label:'Reply', icon:'fa-reply', show:true, onClick:function(){ startReply(row); } },
         { label:'React', icon:'fa-face-smile', show: !row.deleted_at, onClick:function(){ openReactionPicker(row); } },
+        { label: row.pinned_at ? 'Unpin' : 'Pin', icon:'fa-thumbtack', show: !row.deleted_at,
+          onClick:function(){ togglePin(row); } },
+        { label:'Edit', icon:'fa-pen', // D4 — own, non-deleted, text-bearing, still inside the 30-min window
+          show: row.sender_id === uid && !row.deleted_at && row.body != null &&
+                (Date.now() - new Date(row.created_at).getTime()) < 30 * 60 * 1000,
+          onClick:function(){ startEdit(row); } },
         { label:'Delete', icon:'fa-trash-can', danger:true,
           show: row.sender_id === uid && !row.deleted_at,
           onClick:function(){ confirmDeleteInMenu(row); } }
@@ -9564,6 +9674,27 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (conv && rows.length && rows[rows.length - 1].id === row.id){
         conv.last_message_preview = 'This message was deleted';
         renderConvList();
+      }
+    }
+
+    // D3 — pin / unpin (conversation-wide). Goes through the SECURITY DEFINER
+    // set_message_pin RPC (NOT a direct UPDATE): messages RLS UPDATE is sender-only,
+    // so the RPC — which authorizes on conversation participation — is what lets a
+    // participant pin the OTHER party's message. Optimistic set/clear + rollback.
+    async function togglePin(row){
+      if (!row || row.deleted_at) return;
+      var pin = !row.pinned_at;
+      var prev = row.pinned_at || null;
+      row.pinned_at = pin ? new Date().toISOString() : null;
+      if (CURRENT_CONV_ID) renderMessages(CURRENT_CONV_ID);
+      if (window.__kmsgRefreshPins) window.__kmsgRefreshPins(row.conversation_id);
+      var res = await window.sb.rpc('set_message_pin', { p_message_id: row.id, p_pinned: pin });
+      if (res.error){
+        console.warn('[k-messages] pin', res.error);
+        row.pinned_at = prev;                         // rollback
+        if (CURRENT_CONV_ID) renderMessages(CURRENT_CONV_ID);
+        if (window.__kmsgRefreshPins) window.__kmsgRefreshPins(row.conversation_id);
+        if (window.__konekToast) window.__konekToast('Could not update pin. Please try again.', true);
       }
     }
 
@@ -9696,6 +9827,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     async function submitMessage(){
       if (sending) return;
+      if (EDITING){ saveEdit(); return; }   // D4 — composer is in edit mode
       var input = document.getElementById('kmsg-input');
       if (!input || !CURRENT_CONV_ID) return;
       var body = (input.value || '').trim();
@@ -9983,16 +10115,19 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Live UPDATEs on a cached message. Generic column-merge so receipts
     // (read_at/delivered_at) and D1 soft-delete (deleted_at) all propagate; D3/D4
     // extend MERGE_FIELDS with pinned_at / body / edited_at without restructuring.
-    var MERGE_FIELDS = ['read_at', 'delivered_at', 'deleted_at'];
+    var MERGE_FIELDS = ['read_at', 'delivered_at', 'deleted_at', 'pinned_at', 'body', 'edited_at'];
     function onRealtimeMessageUpdate(m){
       if (!m || !m.conversation_id) return;
       var rows = MESSAGES_BY_CONV[m.conversation_id];
       if (!rows) return;
       var row = rows.find(function(r){ return r.id === m.id; });
       if (!row) return;
-      var changed = false;
+      var changed = false, oldPinned = row.pinned_at || null;
       MERGE_FIELDS.forEach(function(f){ if (m[f] !== row[f]){ row[f] = m[f]; changed = true; } });
       if (!changed) return;
+      // D3 — if the pin state flipped (the other party pinned/unpinned), keep the
+      // drawer's Pinned Messages list live too (no-op if the drawer isn't open).
+      if ((row.pinned_at || null) !== oldPinned && window.__kmsgRefreshPins) window.__kmsgRefreshPins(m.conversation_id);
       // If a soft-deleted message was the conversation's latest, keep the sidebar
       // preview honest (the other side sees "This message was deleted").
       if (row.deleted_at){
@@ -10248,6 +10383,11 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     // Re-load conversations on sign-in/out (mirrors k-notifications hook).
     window.__konekReloadChat = start;
+
+    // D3 — cross-IIFE bridge: the drawer (k-chat-drawer) lives in a separate IIFE
+    // and needs to jump the thread to a pinned message; expose scrollToMessage the
+    // same way k-chat-drawer exposes window.openImageViewer.
+    window.__kmsgScrollToMessage = scrollToMessage;
 
     // Debug.
     window.__konekChat = function(){ return { CONVERSATIONS: CONVERSATIONS.slice(), CURRENT_CONV_ID: CURRENT_CONV_ID, MESSAGES_BY_CONV: MESSAGES_BY_CONV }; };
@@ -13141,6 +13281,10 @@ document.addEventListener('DOMContentLoaded', async function() {
             '<button class="kmd-tab" type="button" data-tab="links">Links</button>' +
           '</div>' +
           '<div id="kmd-media-pane"><div class="kmd-empty" style="padding:1rem .625rem;">Loading…</div></div>' +
+          // Pinned Messages (Phase D3) — REAL. Populated by fillPins() from a
+          // dedicated drawer-side fetch (pinned_at not null, non-deleted).
+          '<div class="kmd-label">Pinned Messages</div>' +
+          '<div id="kmd-pins"><div class="kmd-empty" style="padding:1rem .625rem;">Loading…</div></div>' +
           // Chat Actions — PLACEHOLDER (no persistence yet)
           '<div class="kmd-label">Chat Actions</div>' +
           '<div id="kmd-actions"></div>' +
@@ -13174,7 +13318,6 @@ document.addEventListener('DOMContentLoaded', async function() {
       });
       // Chat Actions rows (disabled placeholders)
       var acts = d.querySelector('#kmd-actions');
-      acts.appendChild(row('fa-thumbtack', 'Pinned Messages', { title:'Coming soon' }));
       acts.appendChild(row('fa-bell-slash', 'Mute', { title:'Coming soon' }));
       acts.appendChild(row('fa-bell', 'Notifications', { title:'Coming soon' }));
       acts.appendChild(row('fa-volume-high', 'Sounds', { title:'Coming soon' }));
@@ -13445,11 +13588,76 @@ document.addEventListener('DOMContentLoaded', async function() {
         });
     }
 
+    // Pinned Messages (Phase D3) — dedicated drawer-side fetch. Mirrors fillMedia:
+    // cache-per-conversation + stale guard. Pins are conversation-wide (set via the
+    // set_message_pin RPC on the k-messages side); here we only read + list them.
+    var pinsCache = {};
+    function fillPins(c){
+      var host = document.getElementById('kmd-pins');
+      var cid = c && c.id;
+      if (!cid){ if (host) host.innerHTML = '<div class="kmd-empty" style="padding:1rem .625rem;">No conversation</div>'; return; }
+      if (pinsCache[cid]){ renderPins(cid); return; }
+      if (host) host.innerHTML = '<div class="kmd-empty" style="padding:1rem .625rem;">Loading…</div>';
+      if (!window.sb){ pinsCache[cid] = []; renderPins(cid); return; }
+      window.sb.from('messages')
+        .select('id,sender_id,body,attachment_type,pinned_at')
+        .eq('conversation_id', cid)
+        .not('pinned_at', 'is', null)
+        .is('deleted_at', null)
+        .order('pinned_at', { ascending: false })   // most-recently-pinned first
+        .then(function(res){
+          pinsCache[cid] = (res && res.data) || [];
+          // Stale guard: only paint if this is still the active conversation.
+          var cur = window.__kmsgActiveConv;
+          if (cur && cur.id === cid) renderPins(cid);
+        });
+    }
+    function renderPins(cid){
+      var host = document.getElementById('kmd-pins');
+      if (!host) return;
+      var c = window.__kmsgActiveConv;
+      if (!c || c.id !== cid) return;                // stale guard
+      var rows = pinsCache[cid] || [];
+      host.innerHTML = '';
+      if (!rows.length){ host.innerHTML = '<div class="kmd-empty" style="padding:1rem .625rem;">No pinned messages yet.</div>'; return; }
+      var myId = (window.__currentUser && window.__currentUser.id) || null;
+      rows.forEach(function(m){
+        var item = document.createElement('div');
+        item.className = 'kmd-pin';
+        item.style.cssText = 'display:flex;flex-direction:column;gap:.125rem;padding:.5rem .625rem;cursor:pointer;';
+        var who = document.createElement('div');   // sender name — textContent (safe)
+        who.style.cssText = 'font-size:.6563rem;font-weight:700;color:var(--gd);';
+        who.textContent = (m.sender_id === myId) ? 'You' : (c.other_name || 'Broker');
+        var snip = document.createElement('div');  // one-line snippet — textContent (safe)
+        snip.style.cssText = 'font-size:.75rem;color:var(--tm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+        var body = (m.body || '').trim();
+        snip.textContent = body || (m.attachment_type ? '[attachment]' : '[message]');
+        item.appendChild(who); item.appendChild(snip);
+        item.addEventListener('click', function(){
+          // Jump the thread to the pinned message (cross-IIFE helper), close drawer.
+          closeChatDrawer();
+          if (typeof window.__kmsgScrollToMessage === 'function') window.__kmsgScrollToMessage(m.id);
+        });
+        host.appendChild(item);
+      });
+    }
+    // D3 — cross-IIFE refresh hook. k-messages calls this after a pin toggle or a
+    // realtime pin change: invalidate the cache and, if the drawer is open on that
+    // conversation, re-fetch. No-op when the drawer was never built / isn't open.
+    window.__kmsgRefreshPins = function(cid){
+      if (!cid) return;
+      delete pinsCache[cid];
+      var c = window.__kmsgActiveConv;
+      var drawer = document.getElementById('kmsg-drawer');
+      if (c && c.id === cid && drawer && drawer.classList.contains('open')) fillPins(c);
+    };
+
     function openChatDrawer(){
       buildDrawer();
       fillInfo(window.__kmsgActiveConv);
       fillOtherListings(window.__kmsgActiveConv);
       fillMedia(window.__kmsgActiveConv);
+      fillPins(window.__kmsgActiveConv);
       var d = document.getElementById('kmsg-drawer');
       var s = document.getElementById('kmsg-drawer-scrim');
       if (s) s.classList.add('show');

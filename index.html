@@ -8167,6 +8167,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     var CONVERSATIONS = [];        // [{id, other_id, other_name, other_avatar, other_license, last_message_at, last_message_preview, unread, last_read_at}]
     var MESSAGES_BY_CONV = {};     // cache per conversation_id → [{id, sender_id, body, attachment_listing_id, created_at}]
     var SEARCH = { active:false, q:'' };  // Phase 5 — in-thread search state (client-side, current conv only)
+    // Phase F — GLOBAL search state (sidebar box; a DIFFERENT feature to SEARCH above).
+    // Holds the last server results so the search UI can be rebuilt from state when
+    // renderConvList wipes the list on a realtime re-render.
+    var GSEARCH = { q:'', seq:0, msgs:[], props:[], loading:false, timer:null };
     var CURRENT_PROP_LID = null;          // Phase 5 — thread's listing id for the header shortcut
     var CURRENT_CONV_ID = null;    // selected conversation
     var channel = null;
@@ -10333,6 +10337,207 @@ document.addEventListener('DOMContentLoaded', async function() {
         var hit = !q || (item.textContent || '').toLowerCase().indexOf(q) !== -1;
         item.style.display = hit ? '' : 'none';
       });
+      // Phase F — single entry point: rebuild the grouped search UI from GSEARCH
+      // state. renderConvList() wipes the list's direct children on every realtime
+      // re-render and then re-calls us (see its tail), so rebuilding from state
+      // here is what keeps results alive without touching renderConvList at all.
+      renderSearchGroups();
+    }
+
+    // ═══ Phase F — GLOBAL search: Conversations / Messages / Properties ═══════
+    // Extends the EXISTING sidebar box (no new surface). Conversations = the
+    // in-place DOM filter above (zero queries, existing row click handlers kept).
+    // Messages + Properties are server-side ilike — NO FTS, NO RPC, no schema.
+    //
+    // Participant scoping is RLS's job: messages_participant_select (0003) gates
+    // every row on conversation participation, so .ilike('body',…) can only ever
+    // return the caller's own conversations' messages. The CONVERSATIONS lookup
+    // below is for DISPLAY (whose chat is this) — never as a security filter.
+    var GS_MIN = 2, GS_DEBOUNCE = 250, GS_MSG_LIMIT = 20, GS_PROP_LIMIT = 10;
+
+    // The listings idiom (~4941) verbatim: strip the chars that are structural in
+    // a PostgREST .or() / LIKE pattern. Matches that helper exactly (it does not
+    // strip '_', which stays a single-char wildcard) — consistency over diverging.
+    function gsSanitize(q){ return String(q || '').replace(/[%,()]/g, ' '); }
+    function gsInputValue(){ var i = document.getElementById('chat-search'); return i ? (i.value || '') : ''; }
+
+    // Debounce the server fan-out only — the instant client filter still runs on
+    // every keystroke, so typing stays responsive.
+    function scheduleGlobalSearch(v){
+      if (GSEARCH.timer){ clearTimeout(GSEARCH.timer); GSEARCH.timer = null; }
+      var trimmed = (v || '').trim();
+      GSEARCH.q = trimmed;
+      if (trimmed.length < GS_MIN){
+        GSEARCH.seq++;                    // invalidate anything in flight
+        GSEARCH.msgs = []; GSEARCH.props = []; GSEARCH.loading = false;
+        return;                           // filterConvList() repaints right after
+      }
+      GSEARCH.loading = true;
+      GSEARCH.timer = setTimeout(function(){ runGlobalSearch(trimmed); }, GS_DEBOUNCE);
+    }
+
+    // Two server queries in parallel. Two-layer stale guard: a sequence counter
+    // (mirrors the listings loader's lstSeq) AND a re-check that the box still
+    // holds this query — a slow stale response must never paint over newer results.
+    async function runGlobalSearch(q){
+      if (!window.sb) return;
+      var seq = ++GSEARCH.seq;
+      var san = gsSanitize(q);
+      var res;
+      try {
+        res = await Promise.all([
+          window.sb.from('messages').select('id,conversation_id,body,created_at')
+            .ilike('body', '%' + san + '%')
+            .order('created_at', { ascending: false }).limit(GS_MSG_LIMIT),
+          window.sb.from('listings').select(window.LIST_COLS || '*')
+            .eq('status', 'active')
+            .or('title.ilike.%' + san + '%,description.ilike.%' + san + '%,street_address.ilike.%' + san + '%')
+            .limit(GS_PROP_LIMIT)
+        ]);
+      } catch(e){
+        console.warn('[k-messages] global search', e);
+        if (seq === GSEARCH.seq){ GSEARCH.loading = false; renderSearchGroups(); }
+        return;
+      }
+      if (seq !== GSEARCH.seq || q !== gsInputValue().trim()) return;   // stale — discard
+      var mres = res[0], lres = res[1];
+      if (mres && mres.error) console.warn('[k-messages] search messages', mres.error);
+      if (lres && lres.error) console.warn('[k-messages] search listings', lres.error);
+      GSEARCH.msgs  = (mres && mres.data) || [];
+      GSEARCH.props = ((lres && lres.data) || []).map(function(r){
+        return (typeof window.mapListing === 'function') ? window.mapListing(r) : r;
+      });
+      GSEARCH.loading = false;
+      renderSearchGroups();
+    }
+
+    // Result-group header. Deliberately NOT .kmsg-group — that class is the Phase A
+    // day header, which filterConvList hides while a query is active.
+    function gsHeader(text){
+      var h = document.createElement('div');
+      h.className = 'kmsg-res-hd';
+      h.style.cssText = 'font-size:.625rem;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--tl);padding:.75rem .875rem .25rem;background:rgba(234,245,238,.35);';
+      h.textContent = text;
+      return h;
+    }
+    // highlightBody escapes EVERY segment and injects only literal <mark>, so its
+    // return is safe to assign as innerHTML — the same use as buildBubble (~9301).
+    // Raw message/listing text never touches innerHTML directly.
+    function gsMark(el, text, q){
+      var s = String(text == null ? '' : text);
+      var hl = highlightBody(s, q);
+      if (hl != null) el.innerHTML = hl; else el.textContent = s;
+    }
+
+    function renderSearchGroups(){
+      var list = document.querySelector('#page-messages .chat-list');
+      if (!list) return;
+      var old = list.querySelector('#kmsg-results');     if (old)   old.parentNode.removeChild(old);
+      var oldHd = list.querySelector('#kmsg-res-conv-hd'); if (oldHd) oldHd.parentNode.removeChild(oldHd);
+      var q = GSEARCH.q;
+      if (!q) return;                    // not searching → the normal Phase A list stands
+
+      // Conversations group = the rows filterConvList left visible (zero queries).
+      var visConv = 0;
+      list.querySelectorAll('.kmsg-item').forEach(function(item){
+        if (item.dataset.id && item.style.display !== 'none') visConv++;
+      });
+      if (visConv){
+        var hd = gsHeader('Conversations (' + visConv + ')');
+        hd.id = 'kmsg-res-conv-hd';
+        var clhd = list.querySelector('.cl-hd');
+        if (clhd && clhd.nextSibling) list.insertBefore(hd, clhd.nextSibling);
+        else if (clhd) list.appendChild(hd);
+        else list.insertBefore(hd, list.firstChild);
+      }
+
+      var box = document.createElement('div');
+      box.id = 'kmsg-results';
+      list.appendChild(box);
+
+      if (GSEARCH.msgs.length){
+        box.appendChild(gsHeader('Messages (' + GSEARCH.msgs.length + ')'));
+        GSEARCH.msgs.forEach(function(m){ box.appendChild(buildMsgResult(m, q)); });
+      }
+      if (GSEARCH.props.length){
+        box.appendChild(gsHeader('Properties (' + GSEARCH.props.length + ')'));
+        GSEARCH.props.forEach(function(p){ box.appendChild(buildPropResult(p, q)); });
+      }
+      if (!visConv && !GSEARCH.msgs.length && !GSEARCH.props.length){
+        if (q.length < GS_MIN) return;   // too short to have searched — no empty-state noise
+        var none = document.createElement('div');
+        none.id = 'kmsg-res-empty';
+        none.style.cssText = 'padding:1.5rem 1rem;text-align:center;color:var(--tm);font-size:.7813rem;';
+        none.textContent = GSEARCH.loading ? 'Searching…' : ('No results for “' + q + '”');
+        box.appendChild(none);
+      }
+    }
+
+    function buildMsgResult(m, q){
+      // Display-only mapping (RLS already guarantees this hit is ours).
+      var conv = CONVERSATIONS.find(function(c){ return c.id === m.conversation_id; });
+      var row = document.createElement('div');
+      row.className = 'kmsg-res-item';
+      row.dataset.mid = m.id;
+      row.style.cssText = 'display:flex;gap:.75rem;padding:.625rem .875rem;cursor:pointer;border-bottom:1px solid rgba(210,224,215,.22);align-items:center;';
+      var av = document.createElement('img');
+      av.src = (conv && conv.other_avatar) || ''; av.alt = '';
+      av.style.cssText = 'width:2rem;height:2rem;border-radius:50%;flex-shrink:0;display:block;background:rgba(0,0,0,.05);';
+      var body = document.createElement('div'); body.style.cssText = 'flex:1;min-width:0;';
+      var nm = document.createElement('div');
+      nm.style.cssText = 'font-size:.75rem;font-weight:700;color:var(--td);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+      nm.textContent = (conv && conv.other_name) || 'Conversation';   // textContent — safe
+      var sn = document.createElement('div');
+      sn.style.cssText = 'font-size:.6875rem;color:var(--ts);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:.125rem;';
+      gsMark(sn, m.body || '', q);
+      body.appendChild(nm); body.appendChild(sn);
+      row.appendChild(av); row.appendChild(body);
+      row.addEventListener('click', function(){ jumpToMessage(m.conversation_id, m.id); });
+      return row;
+    }
+
+    function buildPropResult(p, q){
+      var row = document.createElement('div');
+      row.className = 'kmsg-res-item';
+      row.dataset.lid = p.id;
+      row.style.cssText = 'display:flex;gap:.75rem;padding:.625rem .875rem;cursor:pointer;border-bottom:1px solid rgba(210,224,215,.22);align-items:center;';
+      var img = document.createElement('img');
+      img.src = p.img || ''; img.alt = ''; img.loading = 'lazy';
+      img.style.cssText = 'width:2.75rem;height:2.75rem;border-radius:8px;object-fit:cover;flex-shrink:0;display:block;background:rgba(0,0,0,.05);';
+      var body = document.createElement('div'); body.style.cssText = 'flex:1;min-width:0;';
+      var t = document.createElement('div');
+      t.style.cssText = 'font-size:.75rem;font-weight:700;color:var(--td);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+      gsMark(t, p.name || p.title || 'Listing', q);
+      var meta = document.createElement('div');
+      meta.style.cssText = 'font-size:.6875rem;color:var(--ts);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:.125rem;';
+      gsMark(meta, [p.price, p.loc].filter(Boolean).join(' · '), q);
+      body.appendChild(t); body.appendChild(meta);
+      row.appendChild(img); row.appendChild(body);
+      row.addEventListener('click', function(){
+        clearSidebarSearch();
+        if (typeof window.openDetail === 'function') window.openDetail(p.id);
+      });
+      return row;
+    }
+
+    // Open-then-scroll. scrollToMessage only sees the CURRENTLY rendered #kmsg-body,
+    // so the target conversation must be opened AND rendered first — the await is
+    // mandatory. Already-open → skip the reload (avoids a redundant full-history
+    // fetch + markRead). Edge case: if Phase 5's in-thread filter happens to be
+    // hiding the target, scrollToMessage no-ops safely (it bails when !el).
+    async function jumpToMessage(convId, mid){
+      if (convId && convId !== CURRENT_CONV_ID) await openConversation(convId);
+      clearSidebarSearch();   // jump = done; restores the Phase A grouped list
+      scrollToMessage(mid);
+    }
+
+    function clearSidebarSearch(){
+      var i = document.getElementById('chat-search');
+      if (i) i.value = '';
+      if (GSEARCH.timer){ clearTimeout(GSEARCH.timer); GSEARCH.timer = null; }
+      GSEARCH.seq++;                     // invalidate anything in flight
+      GSEARCH.q = ''; GSEARCH.msgs = []; GSEARCH.props = []; GSEARCH.loading = false;
+      filterConvList('');                // restores rows + day headers, drops the search UI
     }
 
     // The template's inline oninput="handleChatSearch(this)" only toggled the
@@ -10341,7 +10546,9 @@ document.addEventListener('DOMContentLoaded', async function() {
     function wireConvSearch(){
       window.handleChatSearch = function(inp){
         suppressMockSearchSuggest();
-        filterConvList(inp && inp.value);
+        var v = inp ? (inp.value || '') : '';
+        scheduleGlobalSearch(v);   // sets GSEARCH.q + debounces the server queries
+        filterConvList(v);         // instant client filter + repaints the search UI
       };
     }
 

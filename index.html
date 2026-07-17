@@ -1084,15 +1084,18 @@ document.addEventListener('DOMContentLoaded', async function() {
        ========================================================================== -->
   <script id="k-data">
   (function(){
-    // ProList image thumbnails via Supabase Pro image transforms (Pro-only
-    // feature). Flag-gated: set localStorage 'prolist.imgtx' = '0' to disable
-    // instantly without a redeploy if transforms are ever unavailable. Pass a
-    // width to get a downscaled CDN render URL; pass width+height for a uniform
-    // cropped thumbnail; omit width for the full-size original.
+    // ProList image thumbnails via Supabase image transforms (Pro-only feature).
+    // Flag-gated: localStorage 'prolist.imgtx' = '1' forces on, '0' forces off,
+    // overriding the default below without a redeploy. Pass a width to get a
+    // downscaled CDN render URL; pass width+height for a uniform cropped
+    // thumbnail; omit width for the full-size original.
     if (!window.__plImg){
       window.__PL_IMG_TX = (function(){
         try { var v = localStorage.getItem('prolist.imgtx'); if (v === '0') return false; if (v === '1') return true; } catch(e){}
-        return true; // Supabase Pro active → transforms on by default
+        // Default OFF: the project is on the Free plan, where transform URLs fail
+        // outright. Falling back to full-size originals costs egress but renders.
+        // Flip back to true when the project returns to Pro.
+        return false;
       })();
       window.__plImg = function(bucket, path, w, h){
         if (!path || !window.sb) return '';

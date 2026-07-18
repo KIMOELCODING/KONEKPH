@@ -10016,7 +10016,17 @@ document.addEventListener('DOMContentLoaded', async function() {
     // ─── Presence + last-seen (Phase 3) ───────────────────────────
     // A dedicated 'presence:online' Realtime channel, separate from the messages
     // postgres_changes sub and the typing broadcast. Joined once per session.
+    // Activity Status (Settings S1): when the user sets it OFF
+    // (preferences.activity_status === false), suppress BOTH presence broadcast
+    // and the last-seen write so peers see them fully offline. Default ON — an
+    // absent key reads as true, preserving the original always-broadcast behavior
+    // (so existing users are never silently turned dark).
+    function activityAllowed(){
+      var u = window.__currentUser;
+      return !(u && u.preferences && u.preferences.activity_status === false);
+    }
     function touchLastSeen(){
+      if (!activityAllowed()) return;                 // S1 — no last-seen when hidden
       try { if (window.sb) window.sb.rpc('touch_last_seen'); } catch(e){}
     }
 
@@ -10034,6 +10044,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     function trackPresence(){
       if (!presenceChannel) return;
+      if (!activityAllowed()) return;                 // S1 — don't advertise online when hidden
       var uid = currentUid();
       if (!uid) return;
       presenceAway = false;
@@ -10095,6 +10106,20 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (conv) renderHeaderMeta(conv);
       }
     }
+
+    // Settings S1 — live Activity Status toggle. k-settings writes the preference
+    // (and updates window.__currentUser.preferences) then calls this so presence
+    // changes take effect immediately: ON re-advertises + re-stamps; OFF drops the
+    // presence track so peers see us go offline right away. trackPresence /
+    // touchLastSeen self-gate on activityAllowed(), so the lifecycle timers respect
+    // the new state without any further wiring. One-way: hiding your activity does
+    // NOT stop you seeing others (renderHeaderMeta is unchanged).
+    window.__konekApplyActivity = function(on){
+      try {
+        if (on){ ensurePresence(); trackPresence(); touchLastSeen(); }
+        else   { untrackPresence(); }
+      } catch(e){}
+    };
 
     // Compact relative time for the header ("Active … ago").
     function fmtSince(iso){
@@ -11669,6 +11694,209 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (trim() || n > 20) clearInterval(iv);
       }, 250);
     }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+    else start();
+    window.addEventListener('konek-bundler-done', start);
+  })();
+  </script>
+  <script id="k-settings">
+  // Settings S1 — make Settings real. Mirrors k-settings-trim: manipulates the
+  // STATIC #page-settings DOM at runtime (never the minified template blob). It
+  //   (1) loads profiles.preferences into the toggles it owns,
+  //   (2) makes Activity Status a real, persisted preference (jsonb MERGE write),
+  //   (3) turns the dead Change Password button into a real re-auth + updateUser
+  //       flow, and
+  //   (4) DELETES the fake controls that have no backend and cannot get one here.
+  // preferences reaches window.__currentUser via loadProfileInto()'s select('*').
+  (function(){
+    function uid(){ return window.__currentUser && window.__currentUser.id; }
+    function prefs(){ return (window.__currentUser && window.__currentUser.preferences) || {}; }
+    function toast(m, e){ if (window.__konekToast) window.__konekToast(m, !!e); }
+
+    // Find a Settings control by its visible label, then act on its .settings-row.
+    function rowByLabel(txt){
+      var lbls = document.querySelectorAll('#page-settings .settings-row-label');
+      for (var i = 0; i < lbls.length; i++){
+        if ((lbls[i].textContent || '').trim() === txt){
+          return lbls[i].closest ? lbls[i].closest('.settings-row') : lbls[i].parentNode.parentNode;
+        }
+      }
+      return null;
+    }
+    function toggleInRow(row){ return row ? row.querySelector('.toggle') : null; }
+    function reflectToggle(row, on){ var t = toggleInRow(row); if (t) t.classList.toggle('on', !!on); }
+
+    // jsonb MERGE write — read the live in-memory prefs (kept current after each
+    // write), spread the patch over them, and persist the WHOLE merged object so
+    // no other key is clobbered. Sequential saves in one session compound because
+    // __currentUser.preferences is updated on success. (Server-side
+    // `preferences || patch` via an RPC is the concurrency-hard version; not
+    // needed for a single sequential settings page.)
+    async function mergePrefs(patch){
+      if (!window.sb || !uid()) return { error: { message: 'not signed in' } };
+      var merged = Object.assign({}, prefs(), patch);
+      var res = await window.sb.from('profiles').update({ preferences: merged }).eq('id', uid());
+      if (res && !res.error && window.__currentUser) window.__currentUser.preferences = merged;
+      return res || { error: { message: 'no response' } };
+    }
+
+    // ---- reflect stored prefs into the toggles this phase owns ----------------
+    function loadPrefsIntoUI(){
+      var p = prefs();
+      var arow = rowByLabel('Activity Status');
+      if (arow) reflectToggle(arow, p.activity_status !== false);   // DEFAULT ON
+      // (S2 will reflect the notification toggles here.)
+    }
+    window.__konekReflectSettings = loadPrefsIntoUI;
+
+    // ---- Activity Status: real, persisted (default ON) ------------------------
+    function wireActivity(){
+      var row = rowByLabel('Activity Status');
+      var t = toggleInRow(row);
+      if (!t || t.dataset.kwired) return;
+      t.dataset.kwired = '1';
+      t.onclick = null;                                     // strip inline class-flip
+      reflectToggle(row, prefs().activity_status !== false);
+      t.addEventListener('click', async function(){
+        var wasOn = t.classList.contains('on');
+        var next  = !wasOn;
+        reflectToggle(row, next);                           // optimistic
+        if (typeof window.__konekApplyActivity === 'function') window.__konekApplyActivity(next);
+        var res = await mergePrefs({ activity_status: next });
+        if (res && res.error){
+          reflectToggle(row, wasOn);                        // rollback UI …
+          if (typeof window.__konekApplyActivity === 'function') window.__konekApplyActivity(wasOn); // … and presence
+          toast('Could not update Activity Status. Please try again.', true);
+        }
+      });
+    }
+
+    // ---- Change Password: re-auth then updateUser -----------------------------
+    // OUT OF SCOPE (no infrastructure — deliberately NOT faked): "log out other
+    // sessions" (Supabase exposes no client session list), a password-changed
+    // email (notify-broker has no such action), and a security/audit-log entry
+    // (audit_log has no writer). The modal does exactly what it can: verify the
+    // current password, then set the new one.
+    function pwValid(v){ return v.length >= 8 && /[A-Z]/.test(v) && /[a-z]/.test(v) && /[0-9]/.test(v) && /[^A-Za-z0-9]/.test(v); }
+    function pwScore(v){ var s = 0; if (v.length >= 8) s++; if (/[A-Z]/.test(v)) s++; if (/[a-z]/.test(v)) s++; if (/[0-9]/.test(v)) s++; if (/[^A-Za-z0-9]/.test(v)) s++; return s; }
+    function ensurePwModal(){
+      var ex = document.getElementById('overlay-change-pw');
+      if (ex || !document.body) return ex;
+      var ov = document.createElement('div'); ov.className = 'overlay'; ov.id = 'overlay-change-pw';
+      var reqRow = function(id, txt){ return '<div id="' + id + '" class="cp-req" style="font-size:.7rem;color:var(--tl,#8a9a8a);display:flex;align-items:center;gap:.375rem;"><i class="fa-solid fa-circle" style="font-size:.4rem;"></i>' + txt + '</div>'; };
+      ov.innerHTML =
+        '<div class="modal" style="max-width:26rem;padding:2rem;">' +
+        '  <div style="text-align:center;margin-bottom:1rem;"><div style="font-size:2.25rem;color:var(--gd,#2a7a3d);margin-bottom:.5rem;"><i class="fa-solid fa-lock"></i></div>' +
+        '  <h3 style="margin:0 0 .25rem;font-size:1.25rem;">Change Password</h3>' +
+        '  <p style="margin:0;color:var(--tm,#4a5a4a);font-size:.8125rem;">Enter your current password, then choose a new one.</p></div>' +
+        '  <label style="display:block;font-size:.75rem;color:var(--tm,#4a5a4a);margin-bottom:.25rem;">Current Password</label>' +
+        '  <input id="cp-current" type="password" autocomplete="current-password" style="width:100%;padding:.6875rem .75rem;font-size:.875rem;border:2px solid var(--br,#d4dcd4);border-radius:10px;box-sizing:border-box;margin-bottom:.75rem;" />' +
+        '  <label style="display:block;font-size:.75rem;color:var(--tm,#4a5a4a);margin-bottom:.25rem;">New Password</label>' +
+        '  <input id="cp-new" type="password" autocomplete="new-password" style="width:100%;padding:.6875rem .75rem;font-size:.875rem;border:2px solid var(--br,#d4dcd4);border-radius:10px;box-sizing:border-box;margin-bottom:.4375rem;" />' +
+        '  <div style="height:5px;border-radius:3px;background:#e6ece6;overflow:hidden;margin-bottom:.5rem;"><div id="cp-meter" style="height:100%;width:0;transition:width .2s,background .2s;background:#c44;"></div></div>' +
+        '  <div style="display:grid;grid-template-columns:1fr 1fr;gap:.25rem .75rem;margin-bottom:.75rem;">' +
+             reqRow('cp-r-len', '8+ characters') + reqRow('cp-r-up', 'Uppercase') + reqRow('cp-r-low', 'Lowercase') + reqRow('cp-r-num', 'Number') + reqRow('cp-r-sp', 'Special char') +
+        '  </div>' +
+        '  <label style="display:block;font-size:.75rem;color:var(--tm,#4a5a4a);margin-bottom:.25rem;">Confirm New Password</label>' +
+        '  <input id="cp-confirm" type="password" autocomplete="new-password" style="width:100%;padding:.6875rem .75rem;font-size:.875rem;border:2px solid var(--br,#d4dcd4);border-radius:10px;box-sizing:border-box;margin-bottom:.5rem;" />' +
+        '  <div id="cp-error" style="color:#c44;font-size:.8125rem;min-height:1.125rem;margin-bottom:.5rem;"></div>' +
+        '  <button id="cp-submit" style="width:100%;padding:.8125rem;background:var(--gd,#2a7a3d);color:#fff;border:0;border-radius:10px;cursor:pointer;font-weight:600;font-size:.875rem;margin-bottom:.5rem;opacity:.5;" disabled>Update Password</button>' +
+        '  <button id="cp-cancel" style="width:100%;padding:.6875rem;background:none;color:var(--tm,#4a5a4a);border:1px solid var(--br,#d4dcd4);border-radius:10px;cursor:pointer;font-size:.8125rem;">Cancel</button>' +
+        '</div>';
+      document.body.appendChild(ov);
+      var cur = ov.querySelector('#cp-current'), nw = ov.querySelector('#cp-new'), cf = ov.querySelector('#cp-confirm');
+      var err = ov.querySelector('#cp-error'), sub = ov.querySelector('#cp-submit'), meter = ov.querySelector('#cp-meter');
+      var reqs = { 'cp-r-len': function(v){ return v.length >= 8; }, 'cp-r-up': function(v){ return /[A-Z]/.test(v); }, 'cp-r-low': function(v){ return /[a-z]/.test(v); }, 'cp-r-num': function(v){ return /[0-9]/.test(v); }, 'cp-r-sp': function(v){ return /[^A-Za-z0-9]/.test(v); } };
+      function refresh(){
+        var v = nw.value || '';
+        Object.keys(reqs).forEach(function(id){
+          var ok = reqs[id](v), el = ov.querySelector('#' + id);
+          if (el){ el.style.color = ok ? 'var(--gd,#2a7a3d)' : 'var(--tl,#8a9a8a)'; el.querySelector('i').className = ok ? 'fa-solid fa-circle-check' : 'fa-solid fa-circle'; el.querySelector('i').style.fontSize = ok ? '.7rem' : '.4rem'; }
+        });
+        var sc = pwScore(v);
+        var colors = ['#c44', '#c44', '#e0a020', '#e0a020', '#3a9e4f', '#2a7a3d'];
+        meter.style.width = (sc / 5 * 100) + '%'; meter.style.background = colors[sc] || '#c44';
+        var ready = pwValid(v) && cf.value === v && (cur.value || '').length > 0;
+        sub.disabled = !ready; sub.style.opacity = ready ? '1' : '.5';
+        if (cf.value && cf.value !== v) err.textContent = 'Passwords do not match.'; else err.textContent = '';
+      }
+      [cur, nw, cf].forEach(function(el){ el.addEventListener('input', refresh); });
+      ov.querySelector('#cp-cancel').addEventListener('click', pwClose);
+      ov.addEventListener('click', function(e){ if (e.target === ov) pwClose(); });
+      sub.addEventListener('click', async function(){
+        err.textContent = '';
+        if (!pwValid(nw.value) || cf.value !== nw.value || !cur.value) return;
+        if (!window.sb){ err.textContent = 'Please sign in again.'; return; }
+        sub.disabled = true; sub.textContent = 'Updating…';
+        try {
+          var email = ((await window.sb.auth.getUser()).data.user || {}).email;
+          if (!email){ err.textContent = 'Please sign in again.'; sub.disabled = false; sub.textContent = 'Update Password'; return; }
+          var re = await window.sb.auth.signInWithPassword({ email: email, password: cur.value });   // re-auth
+          if (re.error){ err.textContent = 'Current password is incorrect.'; sub.disabled = false; sub.textContent = 'Update Password'; return; }
+          var up = await window.sb.auth.updateUser({ password: nw.value });
+          sub.disabled = false; sub.textContent = 'Update Password';
+          if (up.error){ err.textContent = up.error.message || 'Could not update password.'; return; }
+          pwClose(); toast('Password updated.');
+        } catch(e){ sub.disabled = false; sub.textContent = 'Update Password'; err.textContent = (e && e.message) || 'Could not update password.'; }
+      });
+      return ov;
+    }
+    function pwShow(){
+      var ov = ensurePwModal(); if (!ov) return;
+      ['#cp-current', '#cp-new', '#cp-confirm'].forEach(function(s){ var el = ov.querySelector(s); if (el) el.value = ''; });
+      var err = ov.querySelector('#cp-error'); if (err) err.textContent = '';
+      var sub = ov.querySelector('#cp-submit'); if (sub){ sub.disabled = true; sub.style.opacity = '.5'; }
+      var meter = ov.querySelector('#cp-meter'); if (meter) meter.style.width = '0';
+      if (window.showModal) window.showModal('overlay-change-pw'); else ov.classList.add('show');
+    }
+    function pwClose(){ if (window.closeModal) window.closeModal('overlay-change-pw'); else { var o = document.getElementById('overlay-change-pw'); if (o) o.classList.remove('show'); } }
+    function wireChangePassword(){
+      var sec = document.getElementById('sp-security'); if (!sec) return;
+      var btns = sec.querySelectorAll('button');
+      for (var i = 0; i < btns.length; i++){
+        if ((btns[i].textContent || '').trim() === 'Change Password' && !btns[i].dataset.kwired){
+          btns[i].dataset.kwired = '1';
+          btns[i].addEventListener('click', pwShow);
+        }
+      }
+    }
+
+    // ---- delete the fake controls (no backend, cannot get one in S1) ----------
+    function removeRowByLabel(txt){ var r = rowByLabel(txt); if (r && r.parentNode) r.parentNode.removeChild(r); }
+    function deleteFakes(){
+      // 2FA reads "ON" while doing nothing — a security lie; highest-priority removal.
+      removeRowByLabel('Two-Factor Authentication');
+      removeRowByLabel('Active Sessions');            // View Sessions — no session API
+      removeRowByLabel('Show Contact Info');          // contact info shown nowhere public
+      removeRowByLabel('Data Usage for Analytics');   // no telemetry exists
+      removeRowByLabel('Push Notifications');         // no push infrastructure
+      // Translation panel (Interface Language + Auto-Translate): no i18n layer —
+      // remove the whole panel + its nav item. "Preferences" keeps Notifications,
+      // so no empty group heading is left behind.
+      var tnav = document.querySelector('.settings-nav-item[onclick*="switchSettings(\'translation\'"]');
+      var tpanel = document.getElementById('sp-translation');
+      if (tnav && tnav.parentNode) tnav.parentNode.removeChild(tnav);
+      if (tpanel && tpanel.parentNode) tpanel.parentNode.removeChild(tpanel);
+    }
+
+    function wire(){
+      if (!document.getElementById('page-settings')) return false;   // DOM not injected yet
+      deleteFakes();
+      wireActivity();
+      wireChangePassword();
+      loadPrefsIntoUI();
+      return true;
+    }
+    function start(){
+      if (wire()) { /* keep the observer below for late re-injection */ }
+      else { var n = 0, iv = setInterval(function(){ n++; if (wire() || n > 20) clearInterval(iv); }, 250); }
+    }
+    // Re-reflect the stored prefs whenever the user opens Settings (by then the
+    // real profile — and its preferences — is loaded; wiring at boot may run first).
+    document.addEventListener('click', function(e){
+      var link = e.target && e.target.closest && e.target.closest('[data-page="settings"]');
+      if (link) setTimeout(function(){ wire(); loadPrefsIntoUI(); }, 60);
+    }, true);
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
     else start();
     window.addEventListener('konek-bundler-done', start);

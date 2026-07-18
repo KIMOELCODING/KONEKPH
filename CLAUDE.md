@@ -2,111 +2,190 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Freshness note (verified 2026-07-17).** This file was rewritten after the previous
+> version had drifted badly from the code (it described a "Draft 28" mock app with a
+> barely-built backend). The claims below were checked against the repo on that date.
+> `BACKEND_PLAN.md` is **older still** — its `Status:` markers are dated 2026-05-13 and
+> mark shipped features (messaging, calendar, articles) as TODO. **Verify before trusting
+> any "TODO / missing / not built" claim in either doc.**
+
 ## Project Overview
 
-**Konek.ph** is a Philippine real estate broker dashboard. Current state of the repo:
+**ProList** (formerly **Konek.ph** — rebranded 2026-06-02; internal `konek` identifiers,
+folder names, repo, and infra URLs are kept on purpose, do not "fix" them) is a Philippine
+real estate **broker-to-broker** platform. Only brokers are users; buyers/clients are
+off-platform, so all comms stay in-app. There are three deployable surfaces:
 
-- `index.html` — **active** frontend (~185 lines, ~5.3 MB). Minified onto two huge lines: line 174 ≈ 4.8 MB of base64 assets, line 182 ≈ 505 KB of HTML/CSS/JS. Navigate by **string-anchor grep**, never line numbers. A `<style id="k-net-new-ui">` + `<script id="k-net-new-ui-js">` pair is appended just before `</body>` to inject the §7.3 net-new UI (see below).
-- `Draft 19.html` — **archive**; do not edit. Kept for diffing against the older single-file shape.
-- `BACKEND_PLAN.md` — production backend design (Supabase + Cloudflare + PayMongo). Carries a per-area `Status: DONE / PARTIAL / TODO` marker so you can scan progress without diffing files. Schema for `profiles`, `listings`, `notifications`, PSGC + property_types lookups, several triggers, and most RLS are already implemented; messaging/calendar/articles/payments/referrals/audit/conversation-states schema + all 7 Edge Functions are still pending.
-- `supabase/migrations/0001_initial_schema.sql` (282 lines), `supabase/migrations/0002_seed_psgc.sql` (72 lines), `supabase/storage_buckets.sql` (76 lines) — partial backend.
-- `admin/` (built bundle) + `admin-src/` (Vite + React 18 + TS + React Router + Supabase) — separate admin web app at `admin.konek.ph` (planned). Pages present: `Login`, `BrokerApprovals`, `ListingApprovals`. Missing: `AdminArticles`, `AdminUsers`.
-- `config.js` — gitignored, holds `window.SUPABASE_URL` + `window.SUPABASE_ANON_KEY` pointing to a live Supabase project.
-- `service-worker.js`, `manifest.webmanifest`, `icons/` — PWA shell.
+1. **Broker frontend** — `index.html`, a single self-contained ~14,581-line file (~5.3 MB).
+   The **active** app. See "The index.html bundle" below — it is NOT just "minified," it is
+   a self-unpacking bundle with a hard editing constraint.
+2. **Admin app** — `admin-src/` (Vite + React 18 + TS + React Router + `@supabase/supabase-js`)
+   source, built bundle committed at `admin/`. 10 pages (see "Admin app").
+3. **Public marketing site** — `public-site/` (static) + `marketing-src/` (a React portal for
+   marketing users). Built 2026-06-20; not yet deployed to Pages as of this writing.
 
-Demo login (mock, client-side only): `admin@konek.ph` / `admin123`.
+Shared backend: a live **Supabase** project (`ffewjmucspcswdcxouvc`, "KONEK PH",
+ap-southeast-1). `config.js` (gitignored) holds `window.SUPABASE_URL` + `window.SUPABASE_ANON_KEY`.
+PWA shell: `service-worker.js`, `manifest.webmanifest`, `icons/`.
+
+**Supabase plan: FREE (as of 2026-07-17).** Pro lapsed. Consequence baked into the code:
+image transforms are Pro-only, so `window.__PL_IMG_TX` in `index.html` now defaults to
+**false** (falls back to full-size `getPublicUrl`). Flip it back to `true` when the project
+returns to Pro. Free also auto-pauses after ~7 days idle and has no backups.
+
+`Draft 19.html` — **archive; never edit.**
 
 ## Development Workflow
 
-- **Run the broker frontend**: open `index.html` directly in a browser. PowerShell: `start "index.html"`. No build, no install, no server.
-- **Run the admin app (dev)**: `npm --prefix admin-src install` then `npm --prefix admin-src run dev`. Production build output is committed at `admin/`.
-- External CDN deps: Google Fonts (Inter, Plus Jakarta Sans), Font Awesome 6.5.0, Chart.js 4.4.0, (and `@supabase/supabase-js` once it's wired into the broker HTML).
-- No test suite, no lint config. Validate broker-frontend changes by reloading `index.html` in a browser.
-- "Today" inside the broker app is still hardcoded to **2026-05-06** for calendar/event rendering — don't conflate with the real date when reasoning about calendar code.
+- **Run the broker frontend**: open `index.html` in a browser. PowerShell: `start "index.html"`.
+  No build, no install, no server. This is a deliberate constraint — do **not** add a build
+  step, framework, or bundler to the broker frontend.
+- **Run the admin app (dev)**: `npm --prefix admin-src install`, then
+  `npm --prefix admin-src run dev`. Note: `vite.config.ts` pins port **5173**, which is often
+  blocked on the dev Windows box — override with `-- --port 3030 --host 127.0.0.1`. Production
+  build output is committed at `admin/`.
+- **No test suite / no lint.** Correctness of browser-rendered behavior is validated by
+  driving real headless Chrome over the DevTools Protocol (CDP) with plain Node 22 — there is
+  no Playwright here. Working harnesses accumulate in the session scratchpad.
+- "Today" in the calendar is **no longer hardcoded** — it derives from `new Date()`. (The old
+  "hardcoded to 2026-05-06" note is obsolete; zero occurrences remain.)
 
-## Known stale UI to fix when wiring the backend
+## The index.html bundle — READ THIS BEFORE EDITING
 
-- Premium page (anchors: `Enterprise`, `₱999/month`) still advertises **Basic (Free) / Premium ₱999/month / Enterprise**. Rewrite to Regular vs Premium quarterly + monthly-quota model — see `BACKEND_PLAN.md` §7.1.1 / §7.3 / §11.
-- Signup form (anchors: `su-fname`, `su-lname`, `su-email`, `su-phone`, `su-pw`, `su-pw2`) is missing **PRC license #**, **1×1 photo upload**, **PRC ID upload**, **scrolled-to-bottom ToS checkbox** — all required by the plan. Schema columns `profiles.id_photo_url`, `profiles.prc_id_url`, `profiles.tos_accepted_at` are currently nullable in 0001 to allow signups during this gap; tighten to `not null` once the form is extended.
-- Calendar "today" hardcoded to 2026-05-06 (`calYr`, `calMo`, `CAL_EVENTS=`). Unhardcode when wiring `calendar_events`.
+`index.html` is a **self-unpacking bundle**, not merely minified:
+
+- **Line 227 (~4.6 MB)** — one giant JSON string: the app's HTML/CSS/JS template plus base64
+  assets, unpacked at runtime.
+- **Line 235 (~0.48 MB)** — the unpacker + bootstrap.
+- **Lines ~236–14,581** — readable, appended `<script id="k-*">` / `<style id="k-*">` modules
+  that layer on nearly all real features. These edit normally.
+
+Hard rules:
+- **Never Read line 227 or 235 whole** — they will blow up context. Locate with **Grep on
+  literal string anchors**, never line numbers.
+- **Edits inside the line-227 JSON string must be JSON-escaped** or the app dies at load with
+  **"Bundle unpack error"** (this broke once, commit `974ce18`, fixed 2026-06-21). Prefer
+  editing the readable `k-*` modules instead — most features live there.
+- **Always validate after editing**: `node scripts/check-bundle.cjs index.html`. A pre-commit
+  hook also runs it.
+
+### The `k-*` modules (~50, in document order)
+
+Nearly every shipped feature is a `<script id="k-*">` (or `<style id="k-*">`) appended after
+the bundle. Grep `<script id="k-` / `<style id="k-` to list them. Notable ones:
+
+- `k-auth`, `k-signup-extend`, `k-signup-wizard`, `k-pw-meter`, `k-forgot`, `k-login-fix`,
+  `k-auth-light` — real Supabase auth, multi-step signup wizard, password UX.
+- `k-data`, `k-realtime-data`, `k-psgc-db` — live Supabase data wiring (replaces the old mock
+  constants). `k-data` also defines `window.__plImg(bucket,path,w,h)` + the `__PL_IMG_TX` flag.
+- `k-messages`, `k-msg-nav-badge`, `k-chat-polish`, `k-chat-drawer` — full realtime messaging
+  (see "Messaging").
+- `k-calendar`, `k-calendar-actions`, `k-dashboard`, `k-dash-enhance`, `k-listings`,
+  `k-listings-ui`, `k-add-listing-v2`, `k-notifications`, `k-home-render`, `k-home-recent`,
+  `k-help`, `k-report`, `k-broker-profile`, `k-profile`, `k-settings-trim` — page features.
+- `k-signature`, `k-moa-js` — broker e-signature + per-listing Memorandum of Agreement.
+- `k-net-new-ui` / `-css` / `-js` — the tier-lock & onboarding injector (pending-approval /
+  paywall pages, accuracy-agreement + upgrade overlays). Still present.
+- `k-mobile-js`, `k-fluid-root`, `k-desktop-scale`, `k-phone-ph`, `k-anim` — responsive/polish.
 
 ## Frontend Architecture (`index.html`)
 
-### Page/Navigation system
+### Page / navigation
 
-Pages are `<div class="page">` elements inside `#app-shell > .main`. Only the active page has `display:flex`; all others are hidden. `goTo(k)` drives navigation by toggling `.active` and syncing the sidebar `<a class="nav-link" data-page="…">`. PAGES keys (15 baked-in + 2 injected by §7.3):
+Pages are `<div class="page">` inside `#app-shell > .main`; only the active one shows.
+`goTo(key)` toggles `.active` and syncs the sidebar `<a class="nav-link" data-page="…">`.
+The PAGES map lives inside the line-227 bundle. Baked-in keys include: `home, dashboard,
+listings, your-listings, bookmarks, listing-detail, messages, broker, calendar, profile,
+settings, help, premium, notifications, article`; injected by the net-new-ui module:
+`pending-approval`, `paywall`. (Enumerate current keys by grepping `data-page=` and the
+`k-net-new-ui-js` PAGES extension rather than trusting this list verbatim.)
 
-```
-home, dashboard, listings, your-listings, bookmarks, listing-detail, messages,
-broker, calendar, profile, settings, help, premium, notifications, article,
-pending-approval (injected), paywall (injected)
-```
+### Auth → app shell
 
-Inner pages (profile, settings, broker profile, etc.) navigate back with `goTo('dashboard')`. The broker profile sub-page is reached via `openBrokerProfile()` from inside Messages.
+`#app-login` shows by default; `doLogin()` / `doSignup()` add `.visible` to `#app-shell` and
+call `initCharts()` (Chart.js — `analyticsChart`, `postingChart`, destroyed on re-init).
+`doLogout()` reverses it. The net-new-ui injector **wraps** `doLogin` to route to
+`pending-approval` (unapproved) or `paywall` (expired) based on the real profile. Auth is
+wired to Supabase (not the old mock). DevTools test hooks: `window.__currentUser`,
+`__konekIsPremium()`, `__konekRoute()`, `__konekShowPaywall()`, `__konekShowPending()`,
+`__konekOpenUpgrade()`.
 
-### Auth → app shell transition
+### Modals / overlays
 
-`#app-login` is visible by default; `#app-shell` is hidden until `doLogin()` or `doSignup()` adds `.visible` to `#app-shell` and then calls `initCharts()`. `doLogout()` reverses this. Charts are stored in module-level vars (`analyticsChart`, `postingChart`) and destroyed on re-init.
-
-The §7.3 injector **wraps** the original `doLogin` so that after the normal post-login transition, it routes to `pending-approval` (when `__currentUser.is_approved===false`) or `paywall` (when trial/sub expired). The placeholder `window.__currentUser` defaults to a Regular trial broker — replace with a real profile fetch when Supabase Auth is wired.
-
-### Modal / overlay system
-
-`showModal(id)` and `closeModal(id)` toggle `.show` on `.overlay` elements. Built-in overlay ids: `overlay-logout`, `overlay-submit-success`, `overlay-add-listing`, `overlay-adv-filter`, `overlay-new-event`. Injected by §7.3: `overlay-accuracy-agreement` (gates Add Listing submit), `overlay-upgrade` (Premium upsell).
-
-### Calendar
-
-State: `calYr`, `calMo` (0-indexed), `calView` (`'month'` | `'week'`), `calWeekOffset`. Renderers: `renderMiniCal()`, `renderBigCal()`, `renderWeekView()`. Events hardcoded in `CAL_EVENTS` keyed `'YYYY-M-D'`.
+`showModal(id)` / `closeModal(id)` toggle `.show` on `.overlay` elements. Includes
+`overlay-logout`, `overlay-submit-success`, `overlay-add-listing`, `overlay-adv-filter`,
+`overlay-new-event`, plus injected `overlay-accuracy-agreement` (RESA Act §29 gate on Add
+Listing) and `overlay-upgrade` (Premium upsell).
 
 ### Messaging
 
-`selectChat(el, name, role, av, email, isFirst)` updates the chat header/panel/body and writes `currentBroker`, which `openBrokerProfile()` reads to navigate via `goTo('broker')`. The previous `goTo('contacts')` bug is gone in Draft 28.
+Full realtime chat on the Supabase `messages` table (Realtime publication in migration 0019).
+Shipped sub-features (migrations 0027, 0038–0044): read/delivered receipts, attachments,
+reply, soft-delete, reactions, **pin** (`set_message_pin` RPC), **edit within 30 min**
+(`edit_message` RPC), **mute** (`conversation_states.is_muted`), **report user**
+(`user_reports` table + admin review page), and **global search** (ilike, no FTS). The chat
+drawer (`k-chat-drawer`) hosts Shared Media, Pinned Messages, Mute, and Report. Key realtime
+detail: `onRealtimeMessageUpdate` merges a fixed `MERGE_FIELDS` set (`read_at, delivered_at,
+deleted_at, pinned_at, body, edited_at`) from `payload.new`.
 
-### §7.3 net-new broker UI (Draft 28-only)
+### Calendar
 
-Injected at the end of `<body>`:
-
-- `#page-pending-approval` — envelope-icon card, "Your account is under review", Sign out button.
-- `#page-paywall` — Regular vs Premium cards. Premium has GCash + Card buttons (placeholder `alert` until `paymongo-create-source` Edge Function is built).
-- `#overlay-accuracy-agreement` — RESA Act §29 confirmation checkbox; Confirm button gated until checked; intercepts Add Listing submit then re-fires it after confirmation.
-- `#overlay-upgrade` — generic Premium upsell, opened by any locked feature.
-- Lock icon decorators on sidebar `[data-page="messages"]` and listing-detail Call buttons. Click is captured at the capture phase and routed to the upgrade modal when `__currentUser.subscription_tier !== 'premium'`.
-
-Test hooks exposed for DevTools: `window.__currentUser`, `window.__konekIsPremium()`, `window.__konekRoute()`, `window.__konekShowPaywall()`, `window.__konekShowPending()`, `window.__konekOpenUpgrade()`.
-
-### Mock data — now overridden at runtime by `<script id="k-data">`
-
-The four mock constants (`LISTINGS_DATA`, `YOUR_LISTINGS`, `CAL_EVENTS`, `HOME_ARTICLES`) still exist in the minified blob as fallback, but `<script id="k-data">` (appended right after `k-auth`) reassigns `window.*` versions from live Supabase queries after every `__konekRoute()` call:
-
-- `listings` → `LISTINGS_DATA` (status=active, limit 50) + `YOUR_LISTINGS` (broker_id=current). Images resolved via `sb.storage.from('listing-images').getPublicUrl(path)`.
-- `calendar_events` → `CAL_EVENTS` keyed `'YYYY-M-D'` (month not zero-padded). Priority → `cls`: urgent/high → `ev-p`, normal → `ev-g`, low → `ev-b`.
-- `articles` → `HOME_ARTICLES` grouped by `type` (`news`/`announcement`/`memorandum`), only rows with non-null `published_at`.
-
-Known limitation: the original `let calYr/calMo = 2026, 4` is closure-lexical, so writing `window.calYr` doesn't unhardcode the calendar's initial month. Tracked as TODO — needs a `let`→`var` swap on the minified blob.
-
-`PSGC` and `PROP_TYPES` constants → already seeded in `0002_seed_psgc.sql` (curated subset).
+State: `calYr`, `calMo` (0-indexed), `calView` (`month`|`week`), `calWeekOffset`. Renderers:
+`renderMiniCal()`, `renderBigCal()`, `renderWeekView()`. Data comes from the
+`calendar_events` table via `k-data`, keyed `'YYYY-M-D'` (month not zero-padded).
 
 ### CSS conventions
 
-- Theme tokens on `:root`: greens (`--gd`, `--gm`, `--gl`, `--ga`), text (`--td`, `--tm`, `--ts`, `--tl`), borders (`--br`), shadows (`--sh`/`--sh2`/`--sh3`).
-- Glassmorphism: `background: rgba(255,255,255, .5–.65)` + `backdrop-filter: blur(20px) saturate(180%)` + `border: 1px solid rgba(255,255,255, .7–.9)`.
-- Collapsible sidebar 68px → `var(--sw)` (230px) on `:hover` — pure CSS, no JS.
-- The §7.3 injector reuses these tokens (`var(--gd)`, `var(--tm)`, etc.) so injected screens match the rest of the app.
+- `:root` tokens: greens (`--gd`, `--gm`, `--gl`, `--ga`), text (`--td`, `--tm`, `--ts`,
+  `--tl`), borders (`--br`), shadows (`--sh`/`--sh2`/`--sh3`).
+- Glassmorphism: `rgba(255,255,255,.5–.65)` + `backdrop-filter: blur(20px) saturate(180%)` +
+  `1px solid rgba(255,255,255,.7–.9)`.
+- Collapsible sidebar 68px → `var(--sw)` (230px) on `:hover`, pure CSS.
 
-## Backend (planned — see `BACKEND_PLAN.md`)
+## Backend (Supabase) — largely BUILT
 
-The backend is **partially** built. Treat `BACKEND_PLAN.md` as the spec and consult its per-area `**Status:**` markers + section §0 Implementation status before touching anything.
+Treat `BACKEND_PLAN.md` as the original design spec, but **its status markers are stale** —
+much of what it lists as TODO is shipped. Ground truth is the migrations and the live DB.
 
-- Stack: Supabase (Postgres + Auth + Storage + Realtime + Edge Functions) behind Cloudflare (DNS proxy, CDN, WAF). Broker frontend served from Cloudflare Pages at `app.konek.ph`; admin app at `admin.konek.ph`.
-- Roles: brokers self-signup (with PRC ID + 1×1 photo into the private `id-documents` bucket); admins seeded manually. Brokers start `is_approved=false` → admin approves → 3-day trial → quarterly PayMongo charge (**price TBD**, pending expense analysis — use `₱TBD` placeholder).
-- Two tiers: Regular and Premium. **Listing quota refreshes monthly** for both tiers, independent of billing. Tier defaults: Regular = 10/month, Premium = 15/month (numbers TBD). Premium also unlocks chat + matching + call; Regular sees these as locked → upgrade modal.
-- Listings: admin-approved per-listing; editing a listing as a non-admin resets `status` to `'pending'` via trigger.
-- Realtime chat uses Supabase Realtime on `messages`; gated to Premium on both ends via RLS + trigger.
-- Pending work tracked in `BACKEND_PLAN.md` §12 build order: next-up items are migration `0003_messaging_billing.sql`, then Edge Functions, then wiring `doSignup`/`doLogin`/`doLogout` in `index.html`.
+- **Migrations: `0001` … `0044`** in `supabase/migrations/`. Beyond the initial schema/PSGC
+  seed they cover messaging + billing, deals, home content, RLS hardening, listing
+  views/reports, MOA e-signature, support tickets, presence, message
+  attachments/reply/reactions/pin/edit, mute, user reports, and the marketing surface.
+- **Storage buckets (6)**: `id-documents` (private), `avatars`, `listing-images`,
+  `article-images`, `message-attachments`, `marketing-images`.
+- **Edge Functions (5 deployed)** in `supabase/functions/`: `notify-broker`, `moa`,
+  `submit-lead`, `create-marketing-user`, `reset-marketing-password`. (PayMongo billing
+  functions are not among them yet.)
+- Roles: brokers self-signup (PRC ID + 1×1 photo → private `id-documents`), `is_approved=false`
+  → admin approves → trial → quarterly PayMongo charge (**price TBD**). Two tiers, Regular and
+  Premium; monthly listing quota refreshes independent of billing. **Open product decision:**
+  whether chat is free for all tiers or Premium-only (blocks the Referrals feature; note
+  migration `0014_relax_chat_premium_gate` already relaxed the gate once).
+- RLS is the real security boundary. **Standard for "done" on any DB change is a role-switch
+  RLS proof**, not just a passing query.
+
+### Live DB access
+
+Run SQL on the live project via the Supabase Management API using a CLI token stored in
+Windows Credential Manager (`Supabase CLI:supabase`). A `runsql.ps1` helper lives in the
+session scratchpad. **One statement per call** — it rejects multi-statement / begin / commit.
+Never echo the token.
+
+## Admin app (`admin-src/`, built → `admin/`)
+
+Vite + React 18 + TS + React Router + Supabase. **10 pages**: `Login`, `BrokerApprovals`,
+`ListingApprovals`, `ManageListings`, `Reports`, `AdminArticles`, `AdminPromotions`,
+`AdminUsers`, `SupportTickets`, `UserReports`. Routes + lazy chunks in `App.tsx`; the guard
+resolves the session, checks the admin role, and redirects anon users to Login. `admin/`
+(built bundle) is gitignored; `admin-src/` is the source of truth.
 
 ## Working in this repo
 
-- Prefer surgical, anchor-based edits to `index.html`. Never try to Read line 174 or 182 whole — use Grep with literal substrings to locate, then Edit with unique surrounding context.
-- Do **not** introduce a build step, framework, or package manager to the broker frontend. The "open the file in a browser" workflow is a deliberate constraint.
-- The admin app (`admin-src/`) is a separate Vite/React/TS project — normal `npm` workflow applies there.
-- When adding new broker UI listed in `BACKEND_PLAN.md` §7.3, follow the existing `<div class="page">` + `goTo` pattern and `.overlay`/`.modal` pattern. The §7.3 injector at the end of `<body>` shows a working example (DOM injection + PAGES extension + click-capture for tier locks).
+- Prefer surgical, anchor-based edits to `index.html`. Never Read the bundle lines whole;
+  Grep literal substrings, Edit with unique surrounding context, then run
+  `node scripts/check-bundle.cjs index.html`.
+- Do **not** add a build step / framework / package manager to the broker frontend.
+- The admin app and `marketing-src/` are normal Vite/React/TS projects — standard `npm` there.
+- Verify browser-rendered changes for real (CDP-driven headless Chrome); "the Edit returned
+  ok" is not verification for auth/routing/RLS/realtime behavior.
+- Keep `konek`-named identifiers/paths as-is despite the ProList rebrand.

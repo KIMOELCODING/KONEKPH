@@ -11741,11 +11741,25 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
 
     // ---- reflect stored prefs into the toggles this phase owns ----------------
+    // S2 — Notifications toggles → preference keys. These MUST match the pref keys
+    // the 0046 trigger reads (notif_message/notif_listing/notif_moa) and the
+    // notify-broker email gate (email_notifs). "Listing Updates" covers both
+    // listing_approved + listing_rejected (one key). Labels are the POST-relabel
+    // text (Deal Reminders → MOA Ready happens in relabelNotifs before wiring).
+    var NOTIF_TOGGLES = [
+      ['New Messages',        'notif_message'],
+      ['Listing Updates',     'notif_listing'],
+      ['MOA Ready',           'notif_moa'],
+      ['Email Notifications', 'email_notifs']
+    ];
     function loadPrefsIntoUI(){
       var p = prefs();
       var arow = rowByLabel('Activity Status');
       if (arow) reflectToggle(arow, p.activity_status !== false);   // DEFAULT ON
-      // (S2 will reflect the notification toggles here.)
+      NOTIF_TOGGLES.forEach(function(pair){
+        var r = rowByLabel(pair[0]);
+        if (r) reflectToggle(r, p[pair[1]] !== false);             // DEFAULT ON (absent key = enabled)
+      });
     }
     window.__konekReflectSettings = loadPrefsIntoUI;
 
@@ -11770,6 +11784,43 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
       });
     }
+
+    // ---- Notifications (S2): 4 real toggles, jsonb MERGE (default ON) ----------
+    // Deal Reminders is repurposed to the real moa_sent event ("MOA Ready"); the
+    // relabel runs before wiring so the toggle is keyed by its new label.
+    function relabelNotifs(){
+      var lbls = document.querySelectorAll('#page-settings .settings-row-label');
+      for (var i = 0; i < lbls.length; i++){
+        if ((lbls[i].textContent || '').trim() === 'Deal Reminders'){
+          lbls[i].textContent = 'MOA Ready';
+          var sub = lbls[i].nextElementSibling;
+          if (sub && sub.className && sub.className.indexOf('settings-row-sub') >= 0){
+            sub.textContent = 'When a MOA is ready for you to sign';
+          }
+          break;
+        }
+      }
+    }
+    function wireNotifToggle(label, key){
+      var row = rowByLabel(label);
+      var t = toggleInRow(row);
+      if (!t || t.dataset.kwired) return;
+      t.dataset.kwired = '1';
+      t.onclick = null;                                     // strip inline class-flip
+      reflectToggle(row, prefs()[key] !== false);           // default ON
+      t.addEventListener('click', async function(){
+        var wasOn = t.classList.contains('on');
+        var next  = !wasOn;
+        reflectToggle(row, next);                           // optimistic
+        var patch = {}; patch[key] = next;                  // MERGE — coexists with activity_status + siblings
+        var res = await mergePrefs(patch);
+        if (res && res.error){
+          reflectToggle(row, wasOn);                        // rollback
+          toast('Could not update notification setting. Please try again.', true);
+        }
+      });
+    }
+    function wireNotifs(){ NOTIF_TOGGLES.forEach(function(p){ wireNotifToggle(p[0], p[1]); }); }
 
     // ---- Change Password: re-auth then updateUser -----------------------------
     // OUT OF SCOPE (no infrastructure — deliberately NOT faked): "log out other
@@ -11870,6 +11921,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       removeRowByLabel('Show Contact Info');          // contact info shown nowhere public
       removeRowByLabel('Data Usage for Analytics');   // no telemetry exists
       removeRowByLabel('Push Notifications');         // no push infrastructure
+      removeRowByLabel('Platform News');              // no announcement/system notification type exists
       // Translation panel (Interface Language + Auto-Translate): no i18n layer —
       // remove the whole panel + its nav item. "Preferences" keeps Notifications,
       // so no empty group heading is left behind.
@@ -11882,7 +11934,9 @@ document.addEventListener('DOMContentLoaded', async function() {
     function wire(){
       if (!document.getElementById('page-settings')) return false;   // DOM not injected yet
       deleteFakes();
+      relabelNotifs();          // Deal Reminders → MOA Ready (before wiring/reflect)
       wireActivity();
+      wireNotifs();
       wireChangePassword();
       loadPrefsIntoUI();
       return true;

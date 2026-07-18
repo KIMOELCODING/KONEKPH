@@ -84,6 +84,7 @@ interface Broker {
   email: string | null;
   phone: string | null;
   license_number: string | null;
+  preferences: { email_notifs?: boolean } | null;
 }
 
 function renderBrokerEmail(action: "approved" | "rejected", name: string, reason?: string) {
@@ -383,7 +384,7 @@ serve(async (req) => {
 
     const { data: broker, error: brokerErr } = await admin
       .from("profiles")
-      .select("first_name, last_name, email, phone, license_number")
+      .select("first_name, last_name, email, phone, license_number, preferences")
       .eq("id", body.broker_id)
       .single();
     if (brokerErr || !broker?.email) {
@@ -517,15 +518,26 @@ serve(async (req) => {
       }
     }
 
-    try {
-      await sendEmail(to, subject, text);
-    } catch (err) {
-      const errText = String((err as Error)?.message ?? err);
-      console.error("SMTP send failed after retries:", errText);
-      return json({ error: `Email send failed: ${errText}` }, 502);
+    // Master email preference (Settings S2): gate ONLY mail addressed to the
+    // broker (the recipient). When `to === broker.email` the broker IS the
+    // recipient, so this reads the recipient's own preference. Admin-bound mail
+    // (`to === ADMIN_EMAIL`) is never gated — the condition excludes it. Absent
+    // pref ⇒ send (default ON). The admin in-app fan-out above is untouched.
+    const recipientOptedOut =
+      to === broker.email && broker.preferences?.email_notifs === false;
+    let emailed = false;
+    if (!recipientOptedOut) {
+      try {
+        await sendEmail(to, subject, text);
+        emailed = true;
+      } catch (err) {
+        const errText = String((err as Error)?.message ?? err);
+        console.error("SMTP send failed after retries:", errText);
+        return json({ error: `Email send failed: ${errText}` }, 502);
+      }
     }
 
-    return json({ ok: true });
+    return json({ ok: true, emailed });
   } catch (err) {
     console.error("notify-broker error:", err);
     return json({ error: String((err as Error)?.message ?? err) }, 500);

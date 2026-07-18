@@ -8640,6 +8640,11 @@ document.addEventListener('DOMContentLoaded', async function() {
           '.kmsg-react-pick{display:flex;gap:2px;padding:.25rem;}' +
           '.kmsg-react-pick button{width:2rem;height:2rem;border:none;background:transparent;border-radius:8px;font-size:1.125rem;line-height:1;cursor:pointer;transition:transform .12s ease,background .15s ease;}' +
           '.kmsg-react-pick button:hover{background:rgba(234,245,238,.7);transform:scale(1.15);}' +
+          // Thread load skeleton — shimmer bubbles shown while first-load messages
+          // are in flight (reuses the global @keyframes k-shimmer). Pure visual.
+          '.kmsg-sk-row{display:flex;margin:.5rem 1.125rem;}' +
+          '.kmsg-sk-row.me{justify-content:flex-end;}' +
+          '.kmsg-sk-bub{height:2.25rem;border-radius:14px;background:linear-gradient(90deg,rgba(210,224,215,.30) 25%,rgba(210,224,215,.60) 37%,rgba(210,224,215,.30) 63%);background-size:800px 100%;animation:k-shimmer 1.4s linear infinite;}' +
         '</style>' +
         '<div id="kmsg-header" style="padding:.875rem 1.125rem;border-bottom:1px solid rgba(210,224,215,.4);background:rgba(255,255,255,.6);display:flex;align-items:center;gap:.625rem;flex-shrink:0;">' +
           '<div id="kmsg-hdr-empty" style="font-size:.8125rem;color:var(--tm);">Select a conversation to start messaging.</div>' +
@@ -8850,6 +8855,11 @@ document.addEventListener('DOMContentLoaded', async function() {
       var conv = CONVERSATIONS.find(function(c){ return c.id === convId; });
       showPanelHeader(conv || null);
       renderConvList(); // re-paint to highlight selected row
+      // Never leave the thread blank (or showing the previous conversation) while
+      // messages load: paint cached rows instantly, else a skeleton on first open.
+      // loadMessages() → renderMessages() replaces either on arrival.
+      if (MESSAGES_BY_CONV[convId]) renderMessages(convId);
+      else renderThreadSkeleton();
       await loadMessages(convId);
       await markRead(convId);
     }
@@ -9117,6 +9127,24 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (x) x.addEventListener('click', unstageAttachment);
     }
 
+    // Thread load skeleton — painted into #kmsg-body while a conversation's
+    // messages are in flight on FIRST open (no cache). renderMessages() clears
+    // body.innerHTML on arrival, so it replaces this automatically. Deliberately
+    // touches NO scroll/jump bookkeeping (isNearBottom / renderCountByConv /
+    // updateJumpPill) — it is pure paint.
+    function renderThreadSkeleton(){
+      var body = document.getElementById('kmsg-body');
+      if (!body) return;
+      var widths = [58, 42, 66, 38, 52, 46];
+      var sides  = ['', 'me', '', 'me', 'me', ''];
+      var html = '';
+      for (var i = 0; i < widths.length; i++){
+        html += '<div class="kmsg-sk-row ' + sides[i] + '">' +
+                  '<div class="kmsg-sk-bub" style="width:' + widths[i] + '%;"></div>' +
+                '</div>';
+      }
+      body.innerHTML = html;
+    }
     function renderMessages(convId){
       var body = document.getElementById('kmsg-body');
       if (!body) return;
@@ -9594,7 +9622,19 @@ document.addEventListener('DOMContentLoaded', async function() {
           onClick:function(){ startEdit(row); } },
         { label:'Delete', icon:'fa-trash-can', danger:true,
           show: row.sender_id === uid && !row.deleted_at,
-          onClick:function(){ confirmDeleteInMenu(row); } }
+          onClick:function(){ confirmDeleteInMenu(row); } },
+        // Report — only on OTHERS' non-deleted messages (you can't report your own).
+        // Reuses the E2 dialog + user_reports insert cross-IIFE via k-chat-drawer.
+        // Chats are 1:1 and this only shows on not-mine messages, so row.sender_id
+        // IS the conversation's other participant — same target as the drawer's
+        // "Report User", and it dedups on the same (reporter, reported) pair.
+        { label:'Report', icon:'fa-flag',
+          show: row.sender_id !== uid && !row.deleted_at,
+          onClick:function(){
+            if (typeof window.__kmsgOpenUserReport === 'function'){
+              window.__kmsgOpenUserReport(row.sender_id, row.conversation_id);
+            }
+          } }
       ];
     }
     function ensureCtxMenu(){
@@ -13491,8 +13531,10 @@ document.addEventListener('DOMContentLoaded', async function() {
           // Chat Actions — PLACEHOLDER (no persistence yet)
           '<div class="kmd-label">Chat Actions</div>' +
           '<div id="kmd-actions"></div>' +
-          // Privacy & Support — PLACEHOLDER
-          '<div class="kmd-label">Privacy &amp; Support</div>' +
+          // Support — holds Report User + Help (the Privacy row was removed in
+          // Phase A; only the label was stale). Container id kept as kmd-privacy
+          // to avoid breaking the fill logic that populates it below.
+          '<div class="kmd-label">Support</div>' +
           '<div id="kmd-privacy"></div>' +
         '</div>';
       document.body.appendChild(d);
@@ -14010,9 +14052,13 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
       });
     }
-    function openUserReport(c){
+    // Core: open the report dialog targeted at a specific user + optional conv.
+    // Both entry points (drawer "Report User" and the per-message "Report") funnel
+    // here, so there is exactly ONE dialog + insert path (option (a): no message_id;
+    // the per-person dedup index makes message-level granularity illusory).
+    function openUserReportFor(reported, conv){
       ensureUserReportOverlay();
-      URTARGET = { reported: c && c.other_id, conv: c && c.id };
+      URTARGET = { reported: reported || null, conv: conv || null };
       var ov = document.getElementById('overlay-report-user'); if (!ov) return;
       var r = ov.querySelector('#ur-reason'); if (r) r.selectedIndex = 0;
       var lbl = ov.querySelector('#ur-note-label'); if (lbl) lbl.textContent = 'Details (optional)';
@@ -14020,6 +14066,12 @@ document.addEventListener('DOMContentLoaded', async function() {
       var e = ov.querySelector('#ur-error'); if (e) e.textContent = '';
       urShowModal('overlay-report-user');
     }
+    // Drawer entry — reports the conversation's other participant.
+    function openUserReport(c){ openUserReportFor(c && c.other_id, c && c.id); }
+    // Cross-IIFE hook so the k-messages per-message menu can open the SAME dialog
+    // pre-targeted at a message's sender (mirrors window.__kmsgScrollToMessage /
+    // __kmsgRefreshPins, which cross the k-messages ↔ k-chat-drawer boundary).
+    window.__kmsgOpenUserReport = function(userId, convId){ openUserReportFor(userId, convId); };
 
     function openChatDrawer(){
       buildDrawer();

@@ -2621,17 +2621,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     // ---- tier-lock decoration --------------------------------------------
     function decorateLocks(){
       if (isPremium()) return;
-      // Sidebar Messages link
-      var msgLink = document.querySelector('[data-page="messages"]');
-      if (msgLink && !msgLink.querySelector('.k-lock-icon')) {
-        msgLink.classList.add('k-locked');
-        var ic = document.createElement('i');
-        ic.className = 'fa-solid fa-lock k-lock-icon';
-        msgLink.appendChild(ic);
-        msgLink.addEventListener('click', function(e){
-          if (!isPremium()) { e.preventDefault(); e.stopImmediatePropagation(); openOverlay('overlay-upgrade'); }
-        }, true);
-      }
+      // Chat is FREE for all tiers (decision 2026-07-18): a matched broker may be
+      // Regular and must be able to reply in-app, or matching breaks and pushes
+      // them off-platform. Premium's value is the matching engine + direct call,
+      // NOT messaging — so the Messages sidebar lock was removed. Call stays gated.
       // Call buttons on listing detail (look for any button labelled Call inside #page-listing-detail)
       var pld = document.getElementById('page-listing-detail');
       if (pld) {

@@ -10,6 +10,20 @@ const STATUSES: { v: SupportTicket['status']; label: string }[] = [
 ];
 
 type Filter = 'all' | SupportTicket['status'];
+type Kind = 'support' | 'feedback';
+type KindFilter = 'all' | Kind;
+
+// support_tickets has no `type` column: feedback submitted from the broker
+// Settings panel is marked by a "Feedback …" category. Derive the kind from
+// category so support vs feedback stays distinguishable (badge + filter) here.
+function kindOf(t: SupportTicket): Kind {
+  return (t.category ?? '').toLowerCase().startsWith('feedback') ? 'feedback' : 'support';
+}
+
+const KIND_BADGE: Record<Kind, React.CSSProperties> = {
+  feedback: { background: '#ede9fe', color: '#6d28d9', border: '1px solid #ddd6fe' },
+  support:  { background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd' },
+};
 
 function fmtDate(s: string) {
   return new Date(s).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
@@ -34,6 +48,7 @@ export default function SupportTickets() {
   const [rows, setRows] = useState<SupportTicket[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>('all');
+  const [kindFilter, setKindFilter] = useState<KindFilter>('all');
   const [toast, setToast] = useState<{ msg: string; err?: boolean } | null>(null);
 
   function showToast(msg: string, err?: boolean) {
@@ -78,7 +93,10 @@ export default function SupportTickets() {
     showToast('Status updated.');
   }
 
-  const count = rows?.length ?? 0;
+  // Status is filtered server-side (load); kind is derived from category, so
+  // filter it client-side over the loaded rows.
+  const visible = (rows ?? []).filter(t => kindFilter === 'all' || kindOf(t) === kindFilter);
+  const count = rows ? visible.length : 0;
 
   return (
     <div className="card">
@@ -88,6 +106,16 @@ export default function SupportTickets() {
           <div className="card-sub">{rows ? `${count} ticket${count === 1 ? '' : 's'}${filter !== 'all' ? ' · ' + filter.replace('_', ' ') : ''}` : 'Loading…'}</div>
         </div>
         <div className="row" style={{ gap: 8 }}>
+          <select
+            value={kindFilter}
+            onChange={e => setKindFilter(e.target.value as KindFilter)}
+            style={SELECT_STYLE}
+            title="Filter by type"
+          >
+            <option value="all">All types</option>
+            <option value="support">Support</option>
+            <option value="feedback">Feedback</option>
+          </select>
           <select
             value={filter}
             onChange={e => setFilter(e.target.value as Filter)}
@@ -101,15 +129,15 @@ export default function SupportTickets() {
         </div>
       </div>
 
-      {rows && rows.length === 0 && (
+      {rows && visible.length === 0 && (
         <div className="empty">
           <i className="fa-solid fa-life-ring"></i>
           <h3>No tickets</h3>
-          <p>{filter === 'all' ? 'No support tickets have been submitted yet.' : 'No tickets with this status.'}</p>
+          <p>{filter === 'all' && kindFilter === 'all' ? 'No support tickets have been submitted yet.' : 'No tickets match these filters.'}</p>
         </div>
       )}
 
-      {rows && rows.length > 0 && (
+      {rows && visible.length > 0 && (
         <table className="tbl">
           <thead>
             <tr>
@@ -122,14 +150,17 @@ export default function SupportTickets() {
             </tr>
           </thead>
           <tbody>
-            {rows.map(t => (
+            {visible.map(t => (
               <tr key={t.id}>
                 <td><strong style={{ fontVariantNumeric: 'tabular-nums' }}>#{t.reference_no ?? '—'}</strong></td>
                 <td>
                   <div><strong>{requester(t)}</strong></div>
                   <div className="muted txt-sm">{t.profiles?.email ?? '—'}</div>
                 </td>
-                <td>{t.category}</td>
+                <td>
+                  <span className="badge" style={{ ...KIND_BADGE[kindOf(t)], display: 'inline-block', marginBottom: 4, textTransform: 'capitalize' }}>{kindOf(t)}</span>
+                  <div>{t.category}</div>
+                </td>
                 <td style={{ maxWidth: 380 }}>
                   <div style={{ fontWeight: 600, color: 'var(--td)', marginBottom: 2 }}>{t.subject}</div>
                   <div className="muted txt-sm" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{t.message}</div>

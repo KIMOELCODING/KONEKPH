@@ -11931,6 +11931,47 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (tpanel && tpanel.parentNode) tpanel.parentNode.removeChild(tpanel);
     }
 
+    // ---- Feedback panel → support_tickets (S4) --------------------------------
+    // The static #sp-feedback panel persisted nothing. Clone the Help-page ticket
+    // submit (k-help): insert into support_tickets with the broker as user_id.
+    // There is NO `type` column, so feedback is marked via `category`
+    // ("Feedback — <subtype>"); the admin renders category as-is and derives a
+    // feedback/support badge from it. subject is NOT NULL → default "App Feedback".
+    // No rating control exists in the panel, so message is the raw textarea body.
+    function wireFeedback(){
+      var panel = document.getElementById('sp-feedback');
+      if (!panel) return;
+      var btn = panel.querySelector('.btn-primary');
+      var sel = panel.querySelector('select');
+      var ta  = panel.querySelector('textarea');
+      if (!btn || !sel || !ta || btn.dataset.kwired) return;
+      btn.dataset.kwired = '1';
+      btn.addEventListener('click', async function(){
+        var body = (ta.value || '').trim();
+        if (!body){ toast('Please describe your feedback first.', true); ta.focus(); return; }
+        if (!window.sb || !uid()){ toast('Please sign in again to send feedback.', true); return; }
+        var opt = sel.options[sel.selectedIndex];
+        var sub = (opt && (opt.value || opt.text)) || 'General Feedback';
+        var prev = btn.textContent; btn.disabled = true; btn.textContent = 'Submitting…';
+        try {
+          var res = await window.sb.from('support_tickets')
+            .insert({ user_id: uid(), category: 'Feedback — ' + sub, subject: 'App Feedback', message: body })
+            .select('reference_no').single();
+          if (res && res.error){
+            btn.disabled = false; btn.textContent = prev;
+            toast(res.error.message || 'Could not send your feedback. Please try again.', true);
+            return;
+          }
+          ta.value = ''; sel.selectedIndex = 0;
+          btn.disabled = false; btn.textContent = prev;
+          toast('Feedback sent — thank you!');
+        } catch(e){
+          btn.disabled = false; btn.textContent = prev;
+          toast((e && e.message) || 'Could not send your feedback. Please try again.', true);
+        }
+      });
+    }
+
     function wire(){
       if (!document.getElementById('page-settings')) return false;   // DOM not injected yet
       deleteFakes();
@@ -11938,6 +11979,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       wireActivity();
       wireNotifs();
       wireChangePassword();
+      wireFeedback();
       loadPrefsIntoUI();
       return true;
     }

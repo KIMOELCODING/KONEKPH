@@ -5922,7 +5922,7 @@ document.addEventListener('DOMContentLoaded', async function() {
           applyDetailBroker(page, window.__konekDetailBroker);
         } else {
           window.sb.from('broker_directory')
-            .select('id, first_name, last_name, license_number, avatar_url')
+            .select('id, first_name, last_name, license_number, avatar_url, profile_visible')
             .eq('id', row.broker_id).maybeSingle()
             .then(function(res){
               if (res && res.data){
@@ -5933,7 +5933,8 @@ document.addEventListener('DOMContentLoaded', async function() {
                   license: d.license_number || '',
                   first_name: d.first_name || '',
                   last_name: d.last_name || '',
-                  avatar_url: d.avatar_url || ''
+                  avatar_url: d.avatar_url || '',
+                  profile_visible: d.profile_visible   // S3 — null/true = visible, false = hidden
                 };
                 applyDetailBroker(page, window.__konekDetailBroker);
               }
@@ -6028,11 +6029,21 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Paint avatar / name / role+badge from a broker object (mirrors
     // applyDetailBroker's derivation). Visual only — no handler wiring — so it's
     // safe to call again when the async broker fetch resolves.
+    // S3 — a broker who set profile_visibility=false is "hidden" to any viewer who
+    // is NOT them. Both public painters on the listing page (agent card + same-broker
+    // card) honor this so identity never leaks inconsistently. null/true = visible.
+    function brokerHidden(b){
+      var me = window.__currentUser && window.__currentUser.id;
+      return !!(b && b.profile_visible === false && b.id !== me);
+    }
+    var SHIELD_TILE = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80"><rect width="80" height="80" fill="#4a7c59"/><path d="M40 16l18 7v12c0 11-7.5 18.7-18 22-10.5-3.3-18-11-18-22V23z" fill="none" stroke="#e7f3eb" stroke-width="4" stroke-linejoin="round"/><path d="M31 39l6 6 12-12" fill="none" stroke="#e7f3eb" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+
     function paintSbBrokerVisual(card, b){
       if (!card) return;
       b = b || {};
+      var hidden = brokerHidden(b);
       var nameEl = card.querySelector('.ld-sb-name');
-      if (nameEl) nameEl.textContent = b.name || 'ProList Broker';
+      if (nameEl) nameEl.textContent = hidden ? 'Verified ProList Broker' : (b.name || 'ProList Broker');
       var roleEl = card.querySelector('.ld-sb-role');
       if (roleEl){
         roleEl.innerHTML = '';
@@ -6046,15 +6057,20 @@ document.addEventListener('DOMContentLoaded', async function() {
       }
       var avEl = card.querySelector('.ld-sb-av');
       if (avEl){
-        var initials = (((b.first_name || ' ')[0] || '') + ((b.last_name || ' ')[0] || '')).toUpperCase().trim() || 'K';
-        var initialsSvg = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80"><rect width="80" height="80" fill="#4a7c59"/><text x="50%" y="54%" text-anchor="middle" dominant-baseline="middle" font-family="system-ui,sans-serif" font-size="30" font-weight="800" fill="#e7f3eb">' + initials + '</text></svg>');
-        var real = '';
-        if (b.avatar_url){
-          if (b.avatar_url.indexOf('data:') === 0 || b.avatar_url.indexOf('http') === 0) real = b.avatar_url;
-          else { real = window.__plImg('avatars', b.avatar_url, 160, 160); }
+        if (hidden){
+          avEl.onerror = null;
+          avEl.src = SHIELD_TILE;
+        } else {
+          var initials = (((b.first_name || ' ')[0] || '') + ((b.last_name || ' ')[0] || '')).toUpperCase().trim() || 'K';
+          var initialsSvg = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80"><rect width="80" height="80" fill="#4a7c59"/><text x="50%" y="54%" text-anchor="middle" dominant-baseline="middle" font-family="system-ui,sans-serif" font-size="30" font-weight="800" fill="#e7f3eb">' + initials + '</text></svg>');
+          var real = '';
+          if (b.avatar_url){
+            if (b.avatar_url.indexOf('data:') === 0 || b.avatar_url.indexOf('http') === 0) real = b.avatar_url;
+            else { real = window.__plImg('avatars', b.avatar_url, 160, 160); }
+          }
+          avEl.onerror = function(){ this.onerror = null; this.src = initialsSvg; };
+          avEl.src = real || initialsSvg;
         }
-        avEl.onerror = function(){ this.onerror = null; this.src = initialsSvg; };
-        avEl.src = real || initialsSvg;
       }
     }
 
@@ -6287,8 +6303,9 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Paint the listing-detail agent card (name/role/avatar) from a broker
     // object and refresh the broker-profile page if it's open.
     function applyDetailBroker(page, b){
+      var hidden = brokerHidden(b);   // S3 — profile-hidden broker, non-owner viewer
       var nameEl = page.querySelector('.ld-sh-agent-name');
-      if (nameEl) nameEl.textContent = b.name;
+      if (nameEl) nameEl.textContent = hidden ? 'Verified ProList Broker' : b.name;
       var roleEl = page.querySelector('.ld-sh-agent-role');
       if (roleEl){
         // Privacy (Phase 2 #5): never render the raw PRC license number in the
@@ -6305,17 +6322,22 @@ document.addEventListener('DOMContentLoaded', async function() {
       }
       var avEl = page.querySelector('.ld-sh-agent-row img');
       if (avEl){
-        var initials = (((b.first_name || ' ')[0] || '') + ((b.last_name || ' ')[0] || '')).toUpperCase().trim() || 'K';
-        var initialsSvg = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80"><rect width="80" height="80" fill="#4a7c59"/><text x="50%" y="54%" text-anchor="middle" dominant-baseline="middle" font-family="system-ui,sans-serif" font-size="30" font-weight="800" fill="#e7f3eb">' + initials + '</text></svg>');
-        // Resolve the broker's real uploaded photo (avatars bucket path or full
-        // URL); fall back to the initials tile if unset or if the image 404s.
-        var real = '';
-        if (b.avatar_url){
-          if (b.avatar_url.indexOf('data:') === 0 || b.avatar_url.indexOf('http') === 0) real = b.avatar_url;
-          else { real = window.__plImg('avatars', b.avatar_url, 160, 160); }
+        if (hidden){
+          avEl.onerror = null;
+          avEl.src = SHIELD_TILE;
+        } else {
+          var initials = (((b.first_name || ' ')[0] || '') + ((b.last_name || ' ')[0] || '')).toUpperCase().trim() || 'K';
+          var initialsSvg = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80"><rect width="80" height="80" fill="#4a7c59"/><text x="50%" y="54%" text-anchor="middle" dominant-baseline="middle" font-family="system-ui,sans-serif" font-size="30" font-weight="800" fill="#e7f3eb">' + initials + '</text></svg>');
+          // Resolve the broker's real uploaded photo (avatars bucket path or full
+          // URL); fall back to the initials tile if unset or if the image 404s.
+          var real = '';
+          if (b.avatar_url){
+            if (b.avatar_url.indexOf('data:') === 0 || b.avatar_url.indexOf('http') === 0) real = b.avatar_url;
+            else { real = window.__plImg('avatars', b.avatar_url, 160, 160); }
+          }
+          avEl.onerror = function(){ this.onerror = null; this.src = initialsSvg; };
+          avEl.src = real || initialsSvg;
         }
-        avEl.onerror = function(){ this.onerror = null; this.src = initialsSvg; };
-        avEl.src = real || initialsSvg;
       }
       if (typeof window.__konekRenderBrokerProfile === 'function') window.__konekRenderBrokerProfile();
       // Same-Broker Phase 1: if the compact broker card is on-screen, repaint its
@@ -10867,6 +10889,29 @@ document.addEventListener('DOMContentLoaded', async function() {
       }
     }
 
+    // S3 — profile-hidden broker (profile_visibility=false), viewed by anyone who is
+    // NOT them: replace identity with the neutral "Verified ProList Broker" state.
+    // Listings stay visible (count kept) and the Message button stays (contact via
+    // listing is the whole point). The owner viewing self never reaches this.
+    function paintMinimized(page, d){
+      var nm = page.querySelector('#bp-name'); if (nm) nm.textContent = 'Verified ProList Broker';
+      var role = page.querySelector('#bp-role2'); if (role) role.textContent = 'Verified Broker';
+      var av = page.querySelector('.bp-av');
+      if (av){
+        av.onerror = null;
+        av.src = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80"><rect width="80" height="80" fill="#4a7c59"/><path d="M40 16l18 7v12c0 11-7.5 18.7-18 22-10.5-3.3-18-11-18-22V23z" fill="none" stroke="#e7f3eb" stroke-width="4" stroke-linejoin="round"/><path d="M31 39l6 6 12-12" fill="none" stroke="#e7f3eb" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+      }
+      var grid = page.querySelector('.bp-info-grid');
+      if (grid){
+        setField(grid, 'email', null);
+        setField(grid, 'designation', null);
+        setField(grid, 'affiliations', null);
+        setField(grid, 'member since', null);
+        setField(grid, 'closed deals', null);
+        setField(grid, 'listings', (d.__listings || 0) + ' Active');   // listings stay visible
+      }
+    }
+
     // bid -> broker_directory row (+ __listings count). Cached so the
     // MutationObserver re-firing render() doesn't re-hit the network.
     var bpCache = {};
@@ -10887,7 +10932,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       var data = bpCache[bid];
       if (!data){
         var res = await window.sb.from('broker_directory')
-          .select('id, first_name, last_name, title, agency, license_number, closed_deals_count, created_at, avatar_url')
+          .select('id, first_name, last_name, title, agency, license_number, closed_deals_count, created_at, avatar_url, profile_visible')
           .eq('id', bid).maybeSingle();
         if (!res || res.error || !res.data) return;
         var cnt = await window.sb.from('listings')
@@ -10899,7 +10944,10 @@ document.addEventListener('DOMContentLoaded', async function() {
       }
       // The user may have navigated to a different broker during the await.
       if (window.__konekDetailBrokerId !== bid) return;
-      paint(page, data);
+      // S3 — honor profile visibility on this PUBLIC surface. Absent/null/true =
+      // visible; only explicit false hides, and never from the broker themselves.
+      if (data.profile_visible === false && bid !== me) paintMinimized(page, data);
+      else paint(page, data);
     }
     window.__konekRenderBrokerProfile = render;
 
@@ -11760,6 +11808,8 @@ document.addEventListener('DOMContentLoaded', async function() {
         var r = rowByLabel(pair[0]);
         if (r) reflectToggle(r, p[pair[1]] !== false);             // DEFAULT ON (absent key = enabled)
       });
+      var vrow = rowByLabel('Profile Visibility');
+      if (vrow){ var von = p.profile_visibility !== false; reflectToggle(vrow, von); reflectVisSub(vrow, von); }  // DEFAULT ON
     }
     window.__konekReflectSettings = loadPrefsIntoUI;
 
@@ -11781,6 +11831,48 @@ document.addEventListener('DOMContentLoaded', async function() {
           reflectToggle(row, wasOn);                        // rollback UI …
           if (typeof window.__konekApplyActivity === 'function') window.__konekApplyActivity(wasOn); // … and presence
           toast('Could not update Activity Status. Please try again.', true);
+        }
+      });
+    }
+
+    // ---- Profile Visibility (S3): hide profile from PUBLIC surfaces (default ON) ---
+    // Persisted as preferences.profile_visibility (jsonb MERGE, coexists with
+    // activity_status + notif_*). Absent/true = visible; ONLY explicit false hides.
+    // No client side-effect here: the broker_directory.profile_visible flag plus the
+    // public-surface gates (k-broker-profile, k-listing-detail) honor it on READ. The
+    // messages header, chat drawer, and bookmarks are deliberately NOT gated.
+    function visSub(on){
+      return on
+        ? 'Your profile is visible in search and to other brokers.'
+        : "Your profile is hidden; your listings stay visible as 'Verified ProList Broker.'";
+    }
+    function reflectVisSub(row, on){
+      if (!row) return;
+      var lbl = row.querySelector('.settings-row-label');
+      var sub = lbl && lbl.nextElementSibling;
+      if (sub && sub.className && sub.className.indexOf('settings-row-sub') >= 0) sub.textContent = visSub(on);
+    }
+    function wireVisibility(){
+      var row = rowByLabel('Profile Visibility');
+      var t = toggleInRow(row);
+      if (!t || t.dataset.kwired) return;
+      t.dataset.kwired = '1';
+      t.onclick = null;                                     // strip inline class-flip
+      var on0 = prefs().profile_visibility !== false;       // DEFAULT ON (absent = visible)
+      reflectToggle(row, on0);
+      reflectVisSub(row, on0);
+      t.addEventListener('click', async function(){
+        var wasOn = t.classList.contains('on');
+        var next  = !wasOn;
+        reflectToggle(row, next);                           // optimistic
+        reflectVisSub(row, next);
+        var res = await mergePrefs({ profile_visibility: next });  // MERGE — coexists with activity_status + notif_*
+        if (res && res.error){
+          reflectToggle(row, wasOn);                        // rollback
+          reflectVisSub(row, wasOn);
+          toast('Could not update Profile Visibility. Please try again.', true);
+        } else {
+          toast(next ? 'Your profile is now visible.' : 'Your profile is now hidden from public view.');
         }
       });
     }
@@ -11977,6 +12069,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       deleteFakes();
       relabelNotifs();          // Deal Reminders → MOA Ready (before wiring/reflect)
       wireActivity();
+      wireVisibility();         // S3 — Profile Visibility (privacy group)
       wireNotifs();
       wireChangePassword();
       wireFeedback();

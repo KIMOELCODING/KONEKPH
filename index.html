@@ -7949,6 +7949,8 @@ document.addEventListener('DOMContentLoaded', async function() {
         case 'broker_approved':   return { cls:'fa-solid fa-user-check',       tone:'green' };
         case 'broker_rejected':   return { cls:'fa-solid fa-user-xmark',       tone:'red'   };
         case 'message':           return { cls:'fa-solid fa-message',          tone:'blue'  };
+        case 'reminder_created':  return { cls:'fa-solid fa-circle-check',     tone:'gold'  };
+        case 'reminder_photos':   return { cls:'fa-solid fa-camera',           tone:'gold'  };
         case 'reminder':          return { cls:'fa-solid fa-clock',            tone:'gold'  };
         default:                  return { cls:'fa-regular fa-bell',           tone:'gray'  };
       }
@@ -8022,6 +8024,9 @@ document.addEventListener('DOMContentLoaded', async function() {
         item.addEventListener('click', function(ev){
           ev.stopPropagation();
           markRead(r.id);
+          // Click-through: notifications carrying a link (e.g. reminder_* → listing
+          // id) open that target. Rows with no link (older types) just mark read.
+          if (r.link && typeof window.openDetail === 'function') window.openDetail(r.link);
         });
         list.appendChild(item);
       });
@@ -8068,7 +8073,10 @@ document.addEventListener('DOMContentLoaded', async function() {
           dot.className = 'np-dot';
           item.appendChild(dot);
         }
-        item.addEventListener('click', function(){ markRead(r.id); });
+        item.addEventListener('click', function(){
+          markRead(r.id);
+          if (r.link && typeof window.openDetail === 'function') window.openDetail(r.link);
+        });
         list.appendChild(item);
       });
     }

@@ -7952,6 +7952,12 @@ document.addEventListener('DOMContentLoaded', async function() {
         case 'reminder_created':  return { cls:'fa-solid fa-circle-check',     tone:'gold'  };
         case 'reminder_photos':   return { cls:'fa-solid fa-camera',           tone:'gold'  };
         case 'reminder':          return { cls:'fa-solid fa-clock',            tone:'gold'  };
+        case 'referral_received':    return { cls:'fa-solid fa-handshake',      tone:'gold'  };
+        case 'referral_accepted':    return { cls:'fa-solid fa-circle-check',   tone:'green' };
+        case 'referral_declined':    return { cls:'fa-solid fa-circle-xmark',   tone:'red'   };
+        case 'referral_completed':   return { cls:'fa-solid fa-trophy',         tone:'green' };
+        case 'referral_closed_lost': return { cls:'fa-solid fa-circle-xmark',   tone:'red'   };
+        case 'referral_cancelled':   return { cls:'fa-solid fa-ban',            tone:'gray'  };
         default:                  return { cls:'fa-regular fa-bell',           tone:'gray'  };
       }
     }
@@ -8024,9 +8030,10 @@ document.addEventListener('DOMContentLoaded', async function() {
         item.addEventListener('click', function(ev){
           ev.stopPropagation();
           markRead(r.id);
-          // Click-through: notifications carrying a link (e.g. reminder_* → listing
-          // id) open that target. Rows with no link (older types) just mark read.
-          if (r.link && typeof window.openDetail === 'function') window.openDetail(r.link);
+          // Click-through: referral_* → the Referrals page; other linked types
+          // (reminder_* → listing id) → openDetail. Link-less rows just mark read.
+          if (r.type && r.type.indexOf('referral') === 0){ if (window.__konekShowReferrals) window.__konekShowReferrals(); }
+          else if (r.link && typeof window.openDetail === 'function') window.openDetail(r.link);
         });
         list.appendChild(item);
       });
@@ -8075,7 +8082,8 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
         item.addEventListener('click', function(){
           markRead(r.id);
-          if (r.link && typeof window.openDetail === 'function') window.openDetail(r.link);
+          if (r.type && r.type.indexOf('referral') === 0){ if (window.__konekShowReferrals) window.__konekShowReferrals(); }
+          else if (r.link && typeof window.openDetail === 'function') window.openDetail(r.link);
         });
         list.appendChild(item);
       });
@@ -15048,6 +15056,252 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', enhance);
     window.addEventListener('konek-bundler-done', enhance);
     var n = 0, iv = setInterval(function(){ n++; enhance(); if (n > 80) clearInterval(iv); }, 100);
+  })();
+  </script>
+  <script id="k-listing-referrals">
+  // Direct Referrals Phase 1 — a broker hands a LISTING to a contact broker with a
+  // commission split; recipient accepts/declines; sender tracks to completed/lost.
+  // All writes go through the SECURITY DEFINER RPCs (0051); reads via
+  // get_my_listing_referrals (enriched, RLS-safe). Injects its own page + nav +
+  // modal at runtime (mirrors k-moa) — never edits the bundle template.
+  (function(){
+    if (!window.sb) return;
+    function uid(){ return window.__currentUser && window.__currentUser.id; }
+    function toast(m,e){ if (window.__konekToast) window.__konekToast(m,!!e); }
+    function money(v){ return '₱' + Number(v||0).toLocaleString('en-PH'); }
+    var STATUS_LABEL = { pending:'Pending', accepted:'Accepted', declined:'Declined', cancelled:'Cancelled', completed:'Completed', closed_lost:'Lost' };
+    var STATUS_TONE  = { pending:'#c98512', accepted:'#3a7d44', declined:'#c83e3e', cancelled:'#888', completed:'#2f7d4f', closed_lost:'#c83e3e' };
+
+    function injectCss(){
+      if (document.getElementById('k-lr-css')) return;
+      var s = document.createElement('style'); s.id='k-lr-css';
+      s.textContent =
+        '#page-referrals .lr-tabs{display:flex;gap:.5rem;margin:.5rem 0 1rem;}'
+      + '#page-referrals .lr-tab{padding:.5rem .9rem;border-radius:10px;border:1px solid var(--br);background:rgba(255,255,255,.6);cursor:pointer;font-weight:600;font-size:.8125rem;color:var(--tm);display:flex;align-items:center;gap:.4rem;}'
+      + '#page-referrals .lr-tab.active{background:var(--gd);color:#fff;border-color:var(--gd);}'
+      + '#page-referrals .lr-tab .lr-tabbadge{background:#c83e3e;color:#fff;border-radius:999px;font-size:.65rem;padding:.05rem .35rem;min-width:1rem;text-align:center;}'
+      + '#page-referrals .lr-card{display:flex;gap:.75rem;padding:.85rem;border:1px solid var(--br);border-radius:12px;background:rgba(255,255,255,.65);margin-bottom:.6rem;}'
+      + '#page-referrals .lr-card img{width:64px;height:64px;border-radius:9px;object-fit:cover;flex:0 0 auto;background:#e7f3eb;}'
+      + '#page-referrals .lr-card .lr-body{flex:1;min-width:0;}'
+      + '#page-referrals .lr-title{font-weight:700;color:var(--td);font-size:.875rem;}'
+      + '#page-referrals .lr-meta{font-size:.75rem;color:var(--tm);margin-top:.15rem;}'
+      + '#page-referrals .lr-note{font-size:.75rem;color:var(--ts);margin-top:.3rem;font-style:italic;}'
+      + '#page-referrals .lr-pill{display:inline-block;font-size:.65rem;font-weight:700;padding:.1rem .45rem;border-radius:999px;color:#fff;}'
+      + '#page-referrals .lr-actions{display:flex;gap:.4rem;margin-top:.5rem;flex-wrap:wrap;}'
+      + '#page-referrals .lr-btn{padding:.35rem .7rem;border-radius:8px;font-size:.75rem;font-weight:600;cursor:pointer;border:1px solid var(--br);background:#fff;color:var(--td);}'
+      + '#page-referrals .lr-btn.primary{background:var(--gd);color:#fff;border-color:var(--gd);}'
+      + '#page-referrals .lr-btn.danger{color:#c83e3e;border-color:#e6b8b8;}'
+      + '#page-referrals .lr-empty{padding:2rem 1rem;text-align:center;color:var(--tm);font-size:.8125rem;}'
+      + '#overlay-refer .lr-field{display:flex;flex-direction:column;gap:.3rem;margin-bottom:.75rem;}'
+      + '#overlay-refer label{font-size:.75rem;font-weight:600;color:var(--tm);}'
+      + '#overlay-refer select,#overlay-refer input,#overlay-refer textarea{width:100%;padding:.5rem .6rem;border:1px solid var(--br);border-radius:8px;font-family:inherit;font-size:.8125rem;}'
+      + '#overlay-refer .lr-err{color:#c83e3e;font-size:.75rem;min-height:1rem;}';
+      document.head.appendChild(s);
+    }
+
+    function injectPage(){
+      if (document.getElementById('page-referrals')) return;
+      var main = document.querySelector('#app-shell .main') || document.querySelector('.main');
+      if (!main) return;
+      var page = document.createElement('div');
+      page.className = 'page'; page.id = 'page-referrals';
+      page.innerHTML =
+        '<div class="inner-scroll"><div class="inner-hd" style="display:flex;justify-content:space-between;align-items:center;">'
+      + '<div><h1 style="margin:0;">Referrals</h1><p style="margin:.25rem 0 0;color:var(--tm);font-size:.8125rem;">Hand a listing to a contact broker with a commission split.</p></div>'
+      + '<button class="lr-btn primary" id="lr-new-btn"><i class="fa-solid fa-plus"></i> New Referral</button></div>'
+      + '<div class="lr-tabs"><div class="lr-tab active" data-tab="inbox">Inbox <span class="lr-tabbadge" id="lr-inbox-badge" style="display:none;">0</span></div>'
+      + '<div class="lr-tab" data-tab="sent">Sent</div></div>'
+      + '<div id="lr-inbox-list"></div><div id="lr-sent-list" style="display:none;"></div></div>';
+      main.appendChild(page);
+      page.querySelector('#lr-new-btn').addEventListener('click', function(){ openReferModal(null); });
+      page.querySelectorAll('.lr-tab').forEach(function(t){
+        t.addEventListener('click', function(){
+          page.querySelectorAll('.lr-tab').forEach(function(x){ x.classList.remove('active'); });
+          t.classList.add('active');
+          var inbox = t.dataset.tab === 'inbox';
+          page.querySelector('#lr-inbox-list').style.display = inbox ? '' : 'none';
+          page.querySelector('#lr-sent-list').style.display  = inbox ? 'none' : '';
+        });
+      });
+    }
+
+    function injectModal(){
+      if (document.getElementById('overlay-refer')) return;
+      var ov = document.createElement('div');
+      ov.className = 'overlay'; ov.id = 'overlay-refer';
+      ov.innerHTML =
+        '<div class="modal" style="max-width:440px;"><h3>Refer a Listing</h3>'
+      + '<div class="lr-field"><label>Listing</label><select id="lr-listing"></select></div>'
+      + '<div class="lr-field"><label>Refer to (a broker you’ve chatted with)</label><select id="lr-recipient"></select></div>'
+      + '<div class="lr-field"><label>Commission split (%)</label><input id="lr-commission" type="number" min="1" max="100" step="0.5" placeholder="e.g. 15"></div>'
+      + '<div class="lr-field"><label>Note (optional)</label><textarea id="lr-note" rows="3" placeholder="Context for the recipient…"></textarea></div>'
+      + '<div class="lr-err" id="lr-err"></div>'
+      + '<div style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:.5rem;">'
+      + '<button class="lr-btn" id="lr-cancel">Cancel</button><button class="lr-btn primary" id="lr-send">Send Referral</button></div></div>';
+      document.body.appendChild(ov);
+      ov.querySelector('#lr-cancel').addEventListener('click', function(){ closeModal2(); });
+      ov.addEventListener('click', function(e){ if (e.target === ov) closeModal2(); });
+      ov.querySelector('#lr-send').addEventListener('click', submitRefer);
+    }
+    function closeModal2(){ var o=document.getElementById('overlay-refer'); if(o) o.classList.remove('show'); }
+
+    function addNav(){
+      if (document.getElementById('k-lr-nav')) return;
+      var ref = document.querySelector('[data-page="messages"]') || document.querySelector('[data-page="your-listings"]');
+      if (!ref || !ref.parentNode) return;
+      var link = ref.cloneNode(true);
+      link.id = 'k-lr-nav'; link.setAttribute('data-page','referrals'); link.setAttribute('title','Referrals');
+      link.removeAttribute('onclick'); link.classList.remove('active','k-locked');
+      var lk = link.querySelector('.k-lock-icon'); if (lk) lk.remove();
+      var icon = link.querySelector('i'); if (icon) icon.className = 'fa-solid fa-handshake';
+      var span = link.querySelector('span'); if (span) span.textContent = 'Referrals';
+      // pending badge
+      var badge = document.createElement('span'); badge.id='k-lr-navbadge';
+      badge.style.cssText='margin-left:auto;background:#c83e3e;color:#fff;border-radius:999px;font-size:.6rem;padding:.05rem .3rem;display:none;';
+      link.appendChild(badge);
+      ref.parentNode.insertBefore(link, ref.nextSibling);
+      link.addEventListener('click', function(e){ e.preventDefault(); e.stopImmediatePropagation(); showPage(); }, true);
+    }
+
+    // ---- data + render ----
+    var DATA = [];
+    function pendingReceived(){ return DATA.filter(function(r){ return r.direction==='received' && r.status==='pending'; }).length; }
+    function updateBadge(){
+      var c = pendingReceived();
+      var nb = document.getElementById('k-lr-navbadge'); if (nb){ nb.textContent = c; nb.style.display = c>0?'':'none'; }
+      var ib = document.getElementById('lr-inbox-badge'); if (ib){ ib.textContent = c; ib.style.display = c>0?'':'none'; }
+    }
+    async function load(){
+      if (!uid()) return;
+      var r = await window.sb.rpc('get_my_listing_referrals');
+      if (r && r.error){ console.warn('[k-lr] load', r.error); return; }
+      DATA = (r && r.data) || [];
+      render(); updateBadge();
+    }
+    window.__konekReloadReferrals = load;
+
+    function imgFor(r){
+      if (r.listing_image){ return (r.listing_image.indexOf('http')===0 || r.listing_image.indexOf('data:')===0) ? r.listing_image : (window.__plImg ? window.__plImg('listing-images', r.listing_image, 128,128) : ''); }
+      return 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#e7f3eb"/><text x="50%" y="54%" text-anchor="middle" font-size="26" fill="#4a7c59">🏠</text></svg>');
+    }
+    function card(r){
+      var el = document.createElement('div'); el.className='lr-card';
+      var img = document.createElement('img'); img.src = imgFor(r); img.alt=''; el.appendChild(img);
+      var body = document.createElement('div'); body.className='lr-body';
+      var title = document.createElement('div'); title.className='lr-title'; title.textContent = r.listing_title || 'Listing'; body.appendChild(title);
+      var who = document.createElement('div'); who.className='lr-meta';
+      who.textContent = (r.direction==='received' ? ('From ' + (r.from_name||'Broker')) : ('To ' + (r.to_name||'Broker')))
+        + '  ·  ' + money(r.listing_price) + '  ·  ' + (r.commission_pct||0) + '% split';
+      body.appendChild(who);
+      if (r.client_note){ var note=document.createElement('div'); note.className='lr-note'; note.textContent='“'+r.client_note+'”'; body.appendChild(note); }
+      var pill = document.createElement('span'); pill.className='lr-pill'; pill.style.background = STATUS_TONE[r.status]||'#888';
+      pill.textContent = STATUS_LABEL[r.status]||r.status; pill.style.marginTop='.4rem'; pill.style.display='inline-block';
+      body.appendChild(document.createElement('div')).appendChild(pill);
+      // actions
+      var acts = document.createElement('div'); acts.className='lr-actions';
+      if (r.direction==='received' && r.status==='pending'){
+        acts.appendChild(btn('Accept','primary', function(){ respond(r.id,true); }));
+        acts.appendChild(btn('Decline','danger', function(){ respond(r.id,false); }));
+      } else if (r.direction==='sent' && r.status==='pending'){
+        acts.appendChild(btn('Cancel','danger', function(){ act('cancel_listing_referral',{p_referral_id:r.id},'Referral cancelled'); }));
+      } else if (r.direction==='sent' && r.status==='accepted'){
+        acts.appendChild(btn('Mark Completed','primary', function(){ act('complete_listing_referral',{p_referral_id:r.id,p_won:true},'Marked completed'); }));
+        acts.appendChild(btn('Mark Lost','danger', function(){ act('complete_listing_referral',{p_referral_id:r.id,p_won:false},'Marked lost'); }));
+      }
+      if (acts.children.length) body.appendChild(acts);
+      el.appendChild(body);
+      return el;
+    }
+    function btn(label,cls,fn){ var b=document.createElement('button'); b.className='lr-btn'+(cls?(' '+cls):''); b.textContent=label; b.addEventListener('click',fn); return b; }
+    function fill(listEl, rows, emptyMsg){
+      listEl.innerHTML='';
+      if (!rows.length){ var e=document.createElement('div'); e.className='lr-empty'; e.textContent=emptyMsg; listEl.appendChild(e); return; }
+      rows.forEach(function(r){ listEl.appendChild(card(r)); });
+    }
+    function render(){
+      var inbox = document.getElementById('lr-inbox-list'); var sent = document.getElementById('lr-sent-list');
+      if (inbox) fill(inbox, DATA.filter(function(r){return r.direction==='received';}), 'No referrals received yet.');
+      if (sent)  fill(sent,  DATA.filter(function(r){return r.direction==='sent';}),     'You haven’t sent any referrals yet.');
+    }
+
+    async function respond(id, accept){
+      var r = await window.sb.rpc('respond_listing_referral', { p_referral_id:id, p_accept:accept });
+      if (r && r.error){ toast(r.error.message||'Could not respond', true); return; }
+      toast(accept ? 'Referral accepted' : 'Referral declined'); load();
+    }
+    async function act(rpc, args, okMsg){
+      var r = await window.sb.rpc(rpc, args);
+      if (r && r.error){ toast(r.error.message||'Action failed', true); return; }
+      toast(okMsg); load();
+    }
+
+    // ---- send modal ----
+    async function openReferModal(preListingId){
+      injectCss(); injectModal();
+      var ov = document.getElementById('overlay-refer'); if (!ov) return;
+      var lsel = ov.querySelector('#lr-listing'); var rsel = ov.querySelector('#lr-recipient');
+      var err = ov.querySelector('#lr-err'); err.textContent='';
+      ov.querySelector('#lr-commission').value=''; ov.querySelector('#lr-note').value='';
+      lsel.innerHTML='<option value="">Loading…</option>'; rsel.innerHTML='<option value="">Loading…</option>';
+      ov.classList.add('show');
+      // my listings
+      var lr = await window.sb.from('listings').select('id,title,status').eq('broker_id', uid()).order('created_at',{ascending:false});
+      var listings = (lr && lr.data) || [];
+      lsel.innerHTML = listings.length ? '' : '<option value="">You have no listings to refer</option>';
+      listings.forEach(function(l){ var o=document.createElement('option'); o.value=l.id; o.textContent=l.title+' ('+l.status+')'; if(preListingId&&l.id===preListingId)o.selected=true; lsel.appendChild(o); });
+      // contacts
+      var cr = await window.sb.rpc('get_referral_candidates');
+      var cands = (cr && cr.data) || [];
+      rsel.innerHTML = cands.length ? '<option value="">Select a broker…</option>' : '<option value="">No chat contacts yet — message a broker first</option>';
+      cands.forEach(function(x){ var o=document.createElement('option'); o.value=x.broker_id; o.textContent=x.name+(x.agency?(' — '+x.agency):''); rsel.appendChild(o); });
+    }
+    window.__konekOpenReferModal = openReferModal;
+
+    async function submitRefer(){
+      var ov = document.getElementById('overlay-refer'); var err = ov.querySelector('#lr-err');
+      var listingId = ov.querySelector('#lr-listing').value;
+      var to = ov.querySelector('#lr-recipient').value;
+      var pct = parseFloat(ov.querySelector('#lr-commission').value);
+      var note = ov.querySelector('#lr-note').value;
+      err.textContent='';
+      if (!listingId){ err.textContent='Pick a listing to refer.'; return; }
+      if (!to){ err.textContent='Pick a broker to refer to.'; return; }
+      if (!(pct>0 && pct<=100)){ err.textContent='Commission must be between 0 and 100.'; return; }
+      var send = ov.querySelector('#lr-send'); send.disabled=true; var prev=send.textContent; send.textContent='Sending…';
+      var r = await window.sb.rpc('send_listing_referral', { p_listing_id:listingId, p_to_broker:to, p_commission_pct:pct, p_note:note });
+      send.disabled=false; send.textContent=prev;
+      if (r && r.error){ err.textContent = r.error.message || 'Could not send referral.'; return; }
+      closeModal2(); toast('Referral sent'); load();
+      // jump to Sent tab
+      var st = document.querySelector('#page-referrals .lr-tab[data-tab="sent"]'); if (st) st.click();
+    }
+
+    // "Refer this Listing" button on the listing-detail owner panel
+    function decorateOwnerPanel(){
+      var panel = document.getElementById('ld-owner-panel');
+      if (!panel || panel.querySelector('.lr-refer-own')) return;
+      var b = document.createElement('button');
+      b.type='button'; b.className='ld-sh-cta2 lr-refer-own';
+      b.innerHTML='<i class="fa-solid fa-handshake"></i> Refer this Listing';
+      b.addEventListener('click', function(){ openReferModal(window.__konekLastListingId || null); });
+      panel.appendChild(b);
+    }
+
+    function injectAll(){ injectCss(); injectPage(); injectModal(); addNav(); try { if (window.PAGES && typeof window.PAGES==='object' && !('referrals' in window.PAGES)) window.PAGES['referrals']='page-referrals'; } catch(e){} }
+    function showPage(){
+      injectAll();
+      document.querySelectorAll('#app-shell .page, .main .page').forEach(function(p){ p.classList.remove('active'); });
+      var t=document.getElementById('page-referrals'); if(t) t.classList.add('active');
+      document.querySelectorAll('[data-page]').forEach(function(nl){ nl.classList.remove('active'); });
+      var nav=document.getElementById('k-lr-nav'); if(nav) nav.classList.add('active');
+      load();
+    }
+    window.__konekShowReferrals = showPage;
+
+    function boot(){ injectAll(); decorateOwnerPanel(); if (uid()) load(); }
+    if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+    window.addEventListener('konek-bundler-done', boot);
+    new MutationObserver(function(){ addNav(); decorateOwnerPanel(); }).observe(document.body,{childList:true,subtree:true});
   })();
   </script>
 </body>

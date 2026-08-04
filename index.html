@@ -15095,7 +15095,14 @@ document.addEventListener('DOMContentLoaded', async function() {
       + '#overlay-refer .lr-field{display:flex;flex-direction:column;gap:.3rem;margin-bottom:.75rem;}'
       + '#overlay-refer label{font-size:.75rem;font-weight:600;color:var(--tm);}'
       + '#overlay-refer select,#overlay-refer input,#overlay-refer textarea{width:100%;padding:.5rem .6rem;border:1px solid var(--br);border-radius:8px;font-family:inherit;font-size:.8125rem;}'
-      + '#overlay-refer .lr-err{color:#c83e3e;font-size:.75rem;min-height:1rem;}';
+      + '#overlay-refer .lr-err{color:#c83e3e;font-size:.75rem;min-height:1rem;}'
+      + '#page-referrals .lr-sum-group{margin:.1rem 0 .9rem;}'
+      + '#page-referrals .lr-sum-label{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--tm);margin:0 0 .45rem;}'
+      + '#page-referrals .lr-sum-row{display:flex;gap:.55rem;flex-wrap:wrap;}'
+      + '#page-referrals .lr-stat{flex:1 1 110px;min-width:104px;background:rgba(255,255,255,.65);border:1px solid var(--br);border-radius:14px;padding:.65rem .8rem;}'
+      + '#page-referrals .lr-stat .n{font-size:1.5rem;font-weight:800;line-height:1;font-variant-numeric:tabular-nums;color:var(--td);}'
+      + '#page-referrals .lr-stat .l{font-size:.66rem;font-weight:600;text-transform:uppercase;letter-spacing:.02em;color:var(--tm);margin-top:.3rem;display:block;}'
+      + '#page-referrals .lr-sum-empty{color:var(--tm);font-size:.8125rem;padding:.15rem 0 .7rem;}';
       document.head.appendChild(s);
     }
 
@@ -15109,6 +15116,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         '<div class="inner-scroll"><div class="inner-hd" style="display:flex;justify-content:space-between;align-items:center;">'
       + '<div><h1 style="margin:0;">Referrals</h1><p style="margin:.25rem 0 0;color:var(--tm);font-size:.8125rem;">Hand a listing to a contact broker with a commission split.</p></div>'
       + '<button class="lr-btn primary" id="lr-new-btn"><i class="fa-solid fa-plus"></i> New Referral</button></div>'
+      + '<div id="lr-summary"></div>'
       + '<div class="lr-tabs"><div class="lr-tab active" data-tab="inbox">Inbox <span class="lr-tabbadge" id="lr-inbox-badge" style="display:none;">0</span></div>'
       + '<div class="lr-tab" data-tab="sent">Sent</div></div>'
       + '<div id="lr-inbox-list"></div><div id="lr-sent-list" style="display:none;"></div></div>';
@@ -15190,8 +15198,10 @@ document.addEventListener('DOMContentLoaded', async function() {
       var body = document.createElement('div'); body.className='lr-body';
       var title = document.createElement('div'); title.className='lr-title'; title.textContent = r.listing_title || 'Listing'; body.appendChild(title);
       var who = document.createElement('div'); who.className='lr-meta';
+      // Honesty: the ₱ is the LISTING's price (never a commission/earnings figure);
+      // the % is the agreed split of the other broker's commission, not a peso value.
       who.textContent = (r.direction==='received' ? ('From ' + (r.from_name||'Broker')) : ('To ' + (r.to_name||'Broker')))
-        + '  ·  ' + money(r.listing_price) + '  ·  ' + (r.commission_pct||0) + '% split';
+        + '  ·  Listing price ' + money(r.listing_price) + '  ·  ' + (r.commission_pct||0) + '% agreed split';
       body.appendChild(who);
       if (r.client_note){ var note=document.createElement('div'); note.className='lr-note'; note.textContent='“'+r.client_note+'”'; body.appendChild(note); }
       var pill = document.createElement('span'); pill.className='lr-pill'; pill.style.background = STATUS_TONE[r.status]||'#888';
@@ -15218,7 +15228,35 @@ document.addEventListener('DOMContentLoaded', async function() {
       if (!rows.length){ var e=document.createElement('div'); e.className='lr-empty'; e.textContent=emptyMsg; listEl.appendChild(e); return; }
       rows.forEach(function(r){ listEl.appendChild(card(r)); });
     }
+    // P2 — Referral Activity Summary: counts + agreed-% only, computed from the
+    // in-memory DATA (RLS-scoped by get_my_listing_referrals). Deliberately NO peso
+    // earnings/pending/paid: commission_pct is a share of the OTHER broker's
+    // commission, whose base is stored nowhere, so any ₱ figure would be fabricated.
+    function grpCount(rows, statuses){ return rows.filter(function(r){ return statuses.indexOf(r.status) >= 0; }).length; }
+    function statTile(n, label){ return '<div class="lr-stat"><span class="n">' + n + '</span><span class="l">' + label + '</span></div>'; }
+    var IN_PROG = ['pending','accepted']; var CLOSED = ['declined','cancelled','closed_lost'];
+    function renderSummary(){
+      var box = document.getElementById('lr-summary'); if (!box) return;
+      var sent = DATA.filter(function(r){ return r.direction==='sent'; });
+      var recv = DATA.filter(function(r){ return r.direction==='received'; });
+      var active = grpCount(sent, IN_PROG) + grpCount(recv, IN_PROG);
+      var splits = sent.map(function(r){ return Number(r.commission_pct)||0; }).filter(function(v){ return v>0; });
+      var avg = splits.length ? Math.round(splits.reduce(function(a,b){ return a+b; },0) / splits.length) : null;
+      var html = ''
+        + '<div class="lr-sum-group"><div class="lr-sum-label">As referrer — referrals you sent</div><div class="lr-sum-row">'
+        +   statTile(grpCount(sent,['completed']),'Completed') + statTile(grpCount(sent,IN_PROG),'In-progress') + statTile(grpCount(sent,CLOSED),'Closed')
+        + '</div></div>'
+        + '<div class="lr-sum-group"><div class="lr-sum-label">As recipient — referrals you received</div><div class="lr-sum-row">'
+        +   statTile(grpCount(recv,['completed']),'Completed') + statTile(grpCount(recv,IN_PROG),'In-progress') + statTile(grpCount(recv,CLOSED),'Closed')
+        + '</div></div>'
+        + '<div class="lr-sum-group"><div class="lr-sum-row">'
+        +   statTile(active,'Active referrals') + statTile(avg===null ? '—' : (avg + '%'),'Avg agreed split')
+        + '</div></div>';
+      if (!DATA.length) html += '<div class="lr-sum-empty">No referrals yet — send one to get started.</div>';
+      box.innerHTML = html;
+    }
     function render(){
+      renderSummary();
       var inbox = document.getElementById('lr-inbox-list'); var sent = document.getElementById('lr-sent-list');
       if (inbox) fill(inbox, DATA.filter(function(r){return r.direction==='received';}), 'No referrals received yet.');
       if (sent)  fill(sent,  DATA.filter(function(r){return r.direction==='sent';}),     'You haven’t sent any referrals yet.');

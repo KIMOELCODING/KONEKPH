@@ -11181,6 +11181,16 @@ document.addEventListener('DOMContentLoaded', async function() {
     window.updateAlCity      = updateAlCity;
     window.updateAlBarangay  = updateAlBarangay;
 
+    // Reusable PSGC API for other feature blocks (k-buyer-targets) so a
+    // buyer-target's city is drawn from the SAME controlled vocabulary AND the
+    // same value format (option.value = psgc name) that listings store — making
+    // the match trigger's city compare hit on identical strings.
+    window.__konekPsgc = {
+      fetchRegions: fetchRegions, fetchProvinces: fetchProvinces,
+      fetchCities: fetchCities, fetchBarangays: fetchBarangays,
+      fillSelect: fillSelect, codeFor: codeFor
+    };
+
     // Expose for ad-hoc debugging.
     window.__konekPsgcCache = cache;
     window.__konekPsgcClear = function(){
@@ -15400,8 +15410,9 @@ document.addEventListener('DOMContentLoaded', async function() {
       ov.innerHTML =
         '<div class="modal" style="max-width:460px;"><h3>Post a Buyer Request</h3>'
       + '<div class="bt-field"><label>Property type</label><select id="bt-type"></select></div>'
-      + '<div class="bt-row"><div class="bt-field"><label>Target city</label><input id="bt-city" type="text" placeholder="e.g. Makati"></div>'
-      + '<div class="bt-field"><label>Region (optional)</label><input id="bt-region" type="text" placeholder="e.g. NCR"></div></div>'
+      + '<div class="bt-field"><label>Region</label><select id="bt-region-sel"></select></div>'
+      + '<div class="bt-row"><div class="bt-field"><label>Province</label><select id="bt-prov"></select></div>'
+      + '<div class="bt-field"><label>Target city</label><select id="bt-city-sel"></select></div></div>'
       + '<div class="bt-row"><div class="bt-field"><label>Budget min (₱)</label><input id="bt-bmin" type="number" min="0" step="1000"></div>'
       + '<div class="bt-field"><label>Budget max (₱)</label><input id="bt-bmax" type="number" min="0" step="1000"></div>'
       + '<div class="bt-field"><label>Bedrooms</label><input id="bt-beds" type="number" min="0" step="1"></div></div>'
@@ -15475,27 +15486,43 @@ document.addEventListener('DOMContentLoaded', async function() {
       injectCss(); injectModal();
       var ov=document.getElementById('overlay-bt'); if(!ov) return;
       ov.querySelector('#bt-err').textContent='';
-      ['bt-city','bt-region','bt-bmin','bt-bmax','bt-beds','bt-notes'].forEach(function(id){ var f=ov.querySelector('#'+id); if(f) f.value=''; });
+      ['bt-bmin','bt-bmax','bt-beds','bt-notes'].forEach(function(id){ var f=ov.querySelector('#'+id); if(f) f.value=''; });
       var tsel=ov.querySelector('#bt-type');
       if (!tsel.options.length){
         tsel.innerHTML='<option value="">Any property type</option>';
         var pr = await window.sb.from('property_types').select('type').order('type');
         var seen={}; ((pr&&pr.data)||[]).forEach(function(row){ if(row.type && !seen[row.type]){ seen[row.type]=1; var o=document.createElement('option'); o.value=row.type; o.textContent=row.type; tsel.appendChild(o); } });
       }
+      // PSGC city cascade — SAME source + value format (option.value = psgc name)
+      // as Add Listing, so target_city is byte-identical to listings.city.
+      var P = window.__konekPsgc;
+      var rSel=ov.querySelector('#bt-region-sel'), pSel=ov.querySelector('#bt-prov'), cSel=ov.querySelector('#bt-city-sel');
+      if (P && rSel && !rSel.__wired){
+        rSel.__wired = true;
+        rSel.addEventListener('change', async function(){
+          P.fillSelect(pSel,'Select province',[]); P.fillSelect(cSel,'Select city',[]);
+          var rc=P.codeFor(rSel); if(rc) P.fillSelect(pSel,'Select province', await P.fetchProvinces(rc));
+        });
+        pSel.addEventListener('change', async function(){
+          P.fillSelect(cSel,'Select city',[]);
+          var pc=P.codeFor(pSel); if(pc) P.fillSelect(cSel,'Select city', await P.fetchCities(pc));
+        });
+      }
+      if (P && rSel){ P.fillSelect(rSel,'Select region', await P.fetchRegions()); P.fillSelect(pSel,'Select province',[]); P.fillSelect(cSel,'Select city',[]); }
       ov.classList.add('show');
     }
     window.__konekOpenBuyerTarget = openModal;
 
     async function submitPost(){
       var ov=document.getElementById('overlay-bt'); var err=ov.querySelector('#bt-err'); err.textContent='';
-      var city=(ov.querySelector('#bt-city').value||'').trim();
-      if (!city){ err.textContent='Target city is required.'; return; }
+      var city=(ov.querySelector('#bt-city-sel').value||'').trim();   // = psgc name = listings.city format
+      if (!city){ err.textContent='Please select a target city.'; return; }
       if (!uid()){ err.textContent='Please sign in again.'; return; }
       var payload={
         from_broker_id: uid(),
         property_type: ov.querySelector('#bt-type').value || null,
         target_city: city,
-        target_region: (ov.querySelector('#bt-region').value||'').trim() || null,
+        target_region: (ov.querySelector('#bt-region-sel').value||'').trim() || null,
         budget_min: parseFloat(ov.querySelector('#bt-bmin').value) || null,
         budget_max: parseFloat(ov.querySelector('#bt-bmax').value) || null,
         bedrooms: parseInt(ov.querySelector('#bt-beds').value,10) || null,

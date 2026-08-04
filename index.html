@@ -7958,6 +7958,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         case 'referral_completed':   return { cls:'fa-solid fa-trophy',         tone:'green' };
         case 'referral_closed_lost': return { cls:'fa-solid fa-circle-xmark',   tone:'red'   };
         case 'referral_cancelled':   return { cls:'fa-solid fa-ban',            tone:'gray'  };
+        case 'buyer_match':          return { cls:'fa-solid fa-magnifying-glass-location', tone:'gold' };
         default:                  return { cls:'fa-regular fa-bell',           tone:'gray'  };
       }
     }
@@ -8030,9 +8031,11 @@ document.addEventListener('DOMContentLoaded', async function() {
         item.addEventListener('click', function(ev){
           ev.stopPropagation();
           markRead(r.id);
-          // Click-through: referral_* → the Referrals page; other linked types
-          // (reminder_* → listing id) → openDetail. Link-less rows just mark read.
-          if (r.type && r.type.indexOf('referral') === 0){ if (window.__konekShowReferrals) window.__konekShowReferrals(); }
+          // Click-through: buyer_match → open a chat with the poster (link = poster
+          // id); referral_* → the Referrals page; reminder_* (link = listing id) →
+          // openDetail. Link-less rows just mark read.
+          if (r.type === 'buyer_match'){ if (r.link && typeof window.__konekStartChat === 'function') window.__konekStartChat({ brokerId: r.link }); }
+          else if (r.type && r.type.indexOf('referral') === 0){ if (window.__konekShowReferrals) window.__konekShowReferrals(); }
           else if (r.link && typeof window.openDetail === 'function') window.openDetail(r.link);
         });
         list.appendChild(item);
@@ -8082,7 +8085,8 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
         item.addEventListener('click', function(){
           markRead(r.id);
-          if (r.type && r.type.indexOf('referral') === 0){ if (window.__konekShowReferrals) window.__konekShowReferrals(); }
+          if (r.type === 'buyer_match'){ if (r.link && typeof window.__konekStartChat === 'function') window.__konekStartChat({ brokerId: r.link }); }
+          else if (r.type && r.type.indexOf('referral') === 0){ if (window.__konekShowReferrals) window.__konekShowReferrals(); }
           else if (r.link && typeof window.openDetail === 'function') window.openDetail(r.link);
         });
         list.appendChild(item);
@@ -15340,6 +15344,185 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot); else boot();
     window.addEventListener('konek-bundler-done', boot);
     new MutationObserver(function(){ addNav(); decorateOwnerPanel(); }).observe(document.body,{childList:true,subtree:true});
+  })();
+  </script>
+  <script id="k-buyer-targets">
+  // Property Matching Phase 1 — NOTIFY-AND-FORGET. A broker posts a buyer-target
+  // ("client wants [type] in [city], budget up to [X]"); a SECURITY DEFINER trigger
+  // (0052) notifies brokers with an active listing in that city; they reach out via
+  // chat. The post is PRIVATE to the poster (RLS owner-only) — direct DML, no RPC.
+  // Injects its own page + nav + modal (mirrors k-listing-referrals).
+  (function(){
+    if (!window.sb) return;
+    function uid(){ return window.__currentUser && window.__currentUser.id; }
+    function toast(m,e){ if (window.__konekToast) window.__konekToast(m,!!e); }
+    function money(v){ return (v==null||v==='') ? '' : ('₱' + Number(v).toLocaleString('en-PH')); }
+    var ST_TONE={active:'#3a7d44',fulfilled:'#2f7d4f',closed:'#888'}; var ST_LABEL={active:'Active',fulfilled:'Fulfilled',closed:'Closed'};
+
+    function injectCss(){
+      if (document.getElementById('k-bt-css')) return;
+      var s=document.createElement('style'); s.id='k-bt-css';
+      s.textContent =
+        '#page-matching .bt-card{display:flex;justify-content:space-between;gap:.75rem;padding:.85rem;border:1px solid var(--br);border-radius:12px;background:rgba(255,255,255,.65);margin-bottom:.6rem;}'
+      + '#page-matching .bt-title{font-weight:700;color:var(--td);font-size:.875rem;}'
+      + '#page-matching .bt-meta{font-size:.75rem;color:var(--tm);margin-top:.2rem;}'
+      + '#page-matching .bt-note{font-size:.75rem;color:var(--ts);margin-top:.3rem;font-style:italic;}'
+      + '#page-matching .bt-pill{display:inline-block;font-size:.65rem;font-weight:700;padding:.1rem .45rem;border-radius:999px;color:#fff;margin-top:.4rem;}'
+      + '#page-matching .bt-actions{display:flex;flex-direction:column;gap:.4rem;align-items:flex-end;}'
+      + '#page-matching .bt-btn,#overlay-bt .bt-btn{padding:.35rem .7rem;border-radius:8px;font-size:.75rem;font-weight:600;cursor:pointer;border:1px solid var(--br);background:#fff;color:var(--td);}'
+      + '#page-matching .bt-btn.primary,#overlay-bt .bt-btn.primary{background:var(--gd);color:#fff;border-color:var(--gd);}'
+      + '#page-matching .bt-btn.danger{color:#c83e3e;border-color:#e6b8b8;}'
+      + '#page-matching .bt-empty{padding:2rem 1rem;text-align:center;color:var(--tm);font-size:.8125rem;}'
+      + '#overlay-bt .bt-field{display:flex;flex-direction:column;gap:.3rem;margin-bottom:.7rem;}'
+      + '#overlay-bt .bt-row{display:flex;gap:.6rem;}#overlay-bt .bt-row .bt-field{flex:1;}'
+      + '#overlay-bt label{font-size:.75rem;font-weight:600;color:var(--tm);}'
+      + '#overlay-bt select,#overlay-bt input,#overlay-bt textarea{width:100%;padding:.5rem .6rem;border:1px solid var(--br);border-radius:8px;font-family:inherit;font-size:.8125rem;}'
+      + '#overlay-bt .bt-err{color:#c83e3e;font-size:.75rem;min-height:1rem;}';
+      document.head.appendChild(s);
+    }
+
+    function injectPage(){
+      if (document.getElementById('page-matching')) return;
+      var main=document.querySelector('#app-shell .main')||document.querySelector('.main'); if(!main) return;
+      var page=document.createElement('div'); page.className='page'; page.id='page-matching';
+      page.innerHTML =
+        '<div class="inner-scroll"><div class="inner-hd" style="display:flex;justify-content:space-between;align-items:center;">'
+      + '<div><h1 style="margin:0;">Buyer Matching</h1><p style="margin:.25rem 0 0;color:var(--tm);font-size:.8125rem;">Post what your buyer wants — brokers with a matching listing get notified.</p></div>'
+      + '<button class="bt-btn primary" id="bt-new"><i class="fa-solid fa-plus"></i> Post a Request</button></div>'
+      + '<div id="bt-list"></div></div>';
+      main.appendChild(page);
+      page.querySelector('#bt-new').addEventListener('click', openModal);
+    }
+
+    function injectModal(){
+      if (document.getElementById('overlay-bt')) return;
+      var ov=document.createElement('div'); ov.className='overlay'; ov.id='overlay-bt';
+      ov.innerHTML =
+        '<div class="modal" style="max-width:460px;"><h3>Post a Buyer Request</h3>'
+      + '<div class="bt-field"><label>Property type</label><select id="bt-type"></select></div>'
+      + '<div class="bt-row"><div class="bt-field"><label>Target city</label><input id="bt-city" type="text" placeholder="e.g. Makati"></div>'
+      + '<div class="bt-field"><label>Region (optional)</label><input id="bt-region" type="text" placeholder="e.g. NCR"></div></div>'
+      + '<div class="bt-row"><div class="bt-field"><label>Budget min (₱)</label><input id="bt-bmin" type="number" min="0" step="1000"></div>'
+      + '<div class="bt-field"><label>Budget max (₱)</label><input id="bt-bmax" type="number" min="0" step="1000"></div>'
+      + '<div class="bt-field"><label>Bedrooms</label><input id="bt-beds" type="number" min="0" step="1"></div></div>'
+      + '<div class="bt-field"><label>Notes (optional)</label><textarea id="bt-notes" rows="2" placeholder="Anything else about the buyer…"></textarea></div>'
+      + '<div class="bt-err" id="bt-err"></div>'
+      + '<div style="display:flex;gap:.5rem;justify-content:flex-end;"><button class="bt-btn" id="bt-cancel">Cancel</button><button class="bt-btn primary" id="bt-submit">Post Request</button></div></div>';
+      document.body.appendChild(ov);
+      ov.querySelector('#bt-cancel').addEventListener('click', closeM);
+      ov.addEventListener('click', function(e){ if(e.target===ov) closeM(); });
+      ov.querySelector('#bt-submit').addEventListener('click', submitPost);
+    }
+    function closeM(){ var o=document.getElementById('overlay-bt'); if(o) o.classList.remove('show'); }
+
+    function addNav(){
+      if (document.getElementById('k-bt-nav')) return;
+      var ref=document.querySelector('[data-page="messages"]')||document.querySelector('[data-page="your-listings"]');
+      if(!ref||!ref.parentNode) return;
+      var link=ref.cloneNode(true); link.id='k-bt-nav'; link.setAttribute('data-page','matching'); link.setAttribute('title','Buyer Matching');
+      link.removeAttribute('onclick'); link.classList.remove('active','k-locked');
+      var lk=link.querySelector('.k-lock-icon'); if(lk) lk.remove();
+      var icon=link.querySelector('i'); if(icon) icon.className='fa-solid fa-magnifying-glass-location';
+      var span=link.querySelector('span'); if(span) span.textContent='Matching';
+      ref.parentNode.insertBefore(link, ref.nextSibling);
+      link.addEventListener('click', function(e){ e.preventDefault(); e.stopImmediatePropagation(); showPage(); }, true);
+    }
+
+    var DATA=[];
+    async function load(){
+      if (!uid()) return;
+      var r = await window.sb.from('buyer_targets').select('*').eq('from_broker_id', uid()).order('created_at',{ascending:false});
+      if (r && r.error){ console.warn('[k-bt] load', r.error); return; }
+      DATA = (r && r.data) || []; render();
+    }
+    window.__konekReloadMatching = load;
+
+    function card(t){
+      var el=document.createElement('div'); el.className='bt-card';
+      var body=document.createElement('div');
+      var title=document.createElement('div'); title.className='bt-title';
+      title.textContent = (t.property_type || 'Any property') + ' in ' + (t.target_city || '—'); body.appendChild(title);
+      var meta=document.createElement('div'); meta.className='bt-meta';
+      var bud = (t.budget_min || t.budget_max) ? ('Budget ' + (money(t.budget_min)||'—') + '–' + (money(t.budget_max)||'—')) : 'Budget: any';
+      meta.textContent = bud + (t.bedrooms ? ('  ·  ' + t.bedrooms + ' BR') : '') + (t.target_region ? ('  ·  ' + t.target_region) : '');
+      body.appendChild(meta);
+      if (t.buyer_notes){ var n=document.createElement('div'); n.className='bt-note'; n.textContent='“'+t.buyer_notes+'”'; body.appendChild(n); }
+      var pill=document.createElement('span'); pill.className='bt-pill'; pill.style.background=ST_TONE[t.status]||'#888'; pill.textContent=ST_LABEL[t.status]||t.status; body.appendChild(pill);
+      var acts=document.createElement('div'); acts.className='bt-actions';
+      if (t.status==='active'){ acts.appendChild(btn('Mark Fulfilled','primary', function(){ setStatus(t.id,'fulfilled'); })); }
+      acts.appendChild(btn('Delete','danger', function(){ del(t.id); }));
+      el.appendChild(body); el.appendChild(acts); return el;
+    }
+    function btn(label,cls,fn){ var b=document.createElement('button'); b.className='bt-btn'+(cls?(' '+cls):''); b.textContent=label; b.addEventListener('click',fn); return b; }
+    function render(){
+      var list=document.getElementById('bt-list'); if(!list) return; list.innerHTML='';
+      if (!DATA.length){ var e=document.createElement('div'); e.className='bt-empty'; e.textContent='No buyer requests yet. Post what your buyer wants and we’ll notify matching brokers.'; list.appendChild(e); return; }
+      DATA.forEach(function(t){ list.appendChild(card(t)); });
+    }
+
+    async function setStatus(id, status){
+      var r = await window.sb.from('buyer_targets').update({ status:status }).eq('id', id);
+      if (r && r.error){ toast(r.error.message||'Update failed', true); return; }
+      toast(status==='fulfilled'?'Marked fulfilled':'Updated'); load();
+    }
+    async function del(id){
+      var r = await window.sb.from('buyer_targets').delete().eq('id', id);
+      if (r && r.error){ toast(r.error.message||'Delete failed', true); return; }
+      toast('Request deleted'); load();
+    }
+
+    async function openModal(){
+      injectCss(); injectModal();
+      var ov=document.getElementById('overlay-bt'); if(!ov) return;
+      ov.querySelector('#bt-err').textContent='';
+      ['bt-city','bt-region','bt-bmin','bt-bmax','bt-beds','bt-notes'].forEach(function(id){ var f=ov.querySelector('#'+id); if(f) f.value=''; });
+      var tsel=ov.querySelector('#bt-type');
+      if (!tsel.options.length){
+        tsel.innerHTML='<option value="">Any property type</option>';
+        var pr = await window.sb.from('property_types').select('type').order('type');
+        var seen={}; ((pr&&pr.data)||[]).forEach(function(row){ if(row.type && !seen[row.type]){ seen[row.type]=1; var o=document.createElement('option'); o.value=row.type; o.textContent=row.type; tsel.appendChild(o); } });
+      }
+      ov.classList.add('show');
+    }
+    window.__konekOpenBuyerTarget = openModal;
+
+    async function submitPost(){
+      var ov=document.getElementById('overlay-bt'); var err=ov.querySelector('#bt-err'); err.textContent='';
+      var city=(ov.querySelector('#bt-city').value||'').trim();
+      if (!city){ err.textContent='Target city is required.'; return; }
+      if (!uid()){ err.textContent='Please sign in again.'; return; }
+      var payload={
+        from_broker_id: uid(),
+        property_type: ov.querySelector('#bt-type').value || null,
+        target_city: city,
+        target_region: (ov.querySelector('#bt-region').value||'').trim() || null,
+        budget_min: parseFloat(ov.querySelector('#bt-bmin').value) || null,
+        budget_max: parseFloat(ov.querySelector('#bt-bmax').value) || null,
+        bedrooms: parseInt(ov.querySelector('#bt-beds').value,10) || null,
+        buyer_notes: (ov.querySelector('#bt-notes').value||'').trim() || null
+      };
+      var sb=ov.querySelector('#bt-submit'); sb.disabled=true; var prev=sb.textContent; sb.textContent='Posting…';
+      var r = await window.sb.from('buyer_targets').insert(payload);
+      sb.disabled=false; sb.textContent=prev;
+      if (r && r.error){ err.textContent = r.error.message || 'Could not post request.'; return; }
+      closeM(); toast('Request posted — matching brokers notified'); load();
+    }
+
+    function injectAll(){ injectCss(); injectPage(); injectModal(); addNav(); try { if (window.PAGES && typeof window.PAGES==='object' && !('matching' in window.PAGES)) window.PAGES['matching']='page-matching'; } catch(e){} }
+    function showPage(){
+      injectAll();
+      document.querySelectorAll('#app-shell .page, .main .page').forEach(function(p){ p.classList.remove('active'); });
+      var t=document.getElementById('page-matching'); if(t) t.classList.add('active');
+      document.querySelectorAll('[data-page]').forEach(function(nl){ nl.classList.remove('active'); });
+      var nav=document.getElementById('k-bt-nav'); if(nav) nav.classList.add('active');
+      load();
+    }
+    window.__konekShowMatching = showPage;
+
+    function boot(){ injectAll(); if (uid()) load(); }
+    if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+    window.addEventListener('konek-bundler-done', boot);
+    new MutationObserver(function(){ addNav(); }).observe(document.body,{childList:true,subtree:true});
   })();
   </script>
 </body>
